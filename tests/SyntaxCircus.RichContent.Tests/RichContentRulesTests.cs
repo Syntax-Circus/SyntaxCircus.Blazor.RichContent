@@ -111,4 +111,83 @@ public class RichContentRulesTests
 
         RichContentRules.Validate(Doc(new UnknownBlock("f1", raw.RootElement.Clone()))).ShouldBeEmpty();
     }
+
+    [Theory]
+    [InlineData("""{"$block":"callout","id":"c1"}""", "c1")]
+    [InlineData("""{"$block":"extension"}""", null)]
+    public void Validate_UnknownBlockWithKnownDiscriminator_IsMalformed(string json, string? expectedId)
+    {
+        using var raw = JsonDocument.Parse(json);
+        var id = expectedId ?? "";
+
+        var error = RichContentRules.Validate(Doc(new UnknownBlock(id, raw.RootElement.Clone()))).Where(e => e.Code == "malformed-known-block").ShouldHaveSingleItem();
+
+        error.BlockId.ShouldBe(expectedId);
+    }
+
+    [Fact]
+    public void Validate_TotalTextOverBudget_ReportsOncePerDocument()
+    {
+        var limits = new RichContentLimits(TextBytes: 10);
+        var doc = Doc(
+            new RichTextBlock("a", Nodes(Para(Text(new string('x', 20))))),
+            new RichTextBlock("b", Nodes(Para(Text(new string('y', 20))))),
+            new RichTextBlock("c", Nodes(Para(Text(new string('z', 20))))));
+
+        var error = RichContentRules.Validate(doc, limits).Where(e => e.Code == "text-too-large").ShouldHaveSingleItem();
+
+        error.BlockId.ShouldBe("a");
+    }
+
+    private static RichTextNode Row(int cells) =>
+        new(RichTextNodeKind.TableRow, Children: [.. Enumerable.Range(0, cells).Select(_ => new RichTextNode(RichTextNodeKind.TableCell, Children: Nodes(Text("c"))))]);
+
+    [Fact]
+    public void Validate_TableRowsOverLimit_Fails()
+    {
+        var table = new RichTextNode(RichTextNodeKind.Table, Children: [Row(1), Row(1), Row(1)]);
+
+        RichContentRules.Validate(DocOf(table), new RichContentLimits(TableRows: 2)).ShouldContain(e => e.Code == "table-too-large");
+        RichContentRules.Validate(DocOf(table), new RichContentLimits(TableRows: 3)).ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void Validate_TableCellsOverLimit_Fails()
+    {
+        var table = new RichTextNode(RichTextNodeKind.Table, Children: [Row(3)]);
+
+        RichContentRules.Validate(DocOf(table), new RichContentLimits(TableCells: 2)).ShouldContain(e => e.Code == "table-too-large");
+        RichContentRules.Validate(DocOf(table), new RichContentLimits(TableCells: 3)).ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void Validate_GalleryImagesOverLimit_Fails()
+    {
+        var image = new GalleryImage(new MediaRef("m"), "alt", null);
+        var gallery = new GalleryBlock("gal", [image, image], null);
+
+        RichContentRules.Validate(Doc(gallery), new RichContentLimits(GalleryImages: 1)).ShouldContain(e => e.Code == "gallery-size" && e.BlockId == "gal");
+        RichContentRules.Validate(Doc(gallery), new RichContentLimits(GalleryImages: 2)).ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void Validate_ExtensionDataOverLimit_Fails()
+    {
+        using var big = JsonDocument.Parse($$"""{"s":"{{new string('x', 16 * 1024)}}"}""");
+        using var small = JsonDocument.Parse("""{"s":"x"}""");
+
+        RichContentRules.Validate(Doc(new ExtensionBlock("ext", "project-card", big.RootElement.Clone())))
+            .ShouldContain(e => e.Code == "extension-data-too-large" && e.BlockId == "ext");
+        RichContentRules.Validate(Doc(new ExtensionBlock("ext", "project-card", small.RootElement.Clone()))).ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void ValidateNodes_CustomDepthLimit_IsHonoured()
+    {
+        var nodes = Nodes(Para(new RichTextNode(RichTextNodeKind.Strong, Children: Nodes(Text("x")))));
+
+        RichContentRules.ValidateNodes(nodes, "b1", new RichContentLimits(Depth: 2)).ShouldContain(e => e.Code == "depth-exceeded");
+        RichContentRules.ValidateNodes(nodes, "b1", new RichContentLimits(Depth: 3)).ShouldBeEmpty();
+        RichContentRules.ValidateNodes(nodes, "b1").ShouldBeEmpty();
+    }
 }

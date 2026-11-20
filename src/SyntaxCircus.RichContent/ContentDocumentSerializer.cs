@@ -111,6 +111,8 @@ public static class ContentDocumentSerializer
         }
     }
 
+    internal static bool IsKnownDiscriminator(string? type) => type is not null && KnownBlocks.Contains(type);
+
     private static bool HasRequiredMembers(ContentBlock block) => block.Id is not null && block switch
     {
         RichTextBlock b => !b.Nodes.IsDefault,

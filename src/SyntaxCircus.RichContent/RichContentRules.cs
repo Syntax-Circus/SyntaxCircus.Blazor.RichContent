@@ -78,7 +78,17 @@ public static partial class RichContentRules
                         errors.Add(new(id, "extension-data-too-large", $"Extension data may be at most {RichContentLimits.ExtensionDataBytes} bytes."));
                     }
                     break;
-                // UnknownBlock is preserved verbatim and is not an error.
+                case UnknownBlock unknown:
+                    // Genuinely unknown discriminators are preserved verbatim; a known one that failed to bind is malformed.
+                    if (unknown.Raw.ValueKind == JsonValueKind.Object
+                        && unknown.Raw.TryGetProperty("$block", out var discriminator)
+                        && discriminator.ValueKind == JsonValueKind.String
+                        && ContentDocumentSerializer.IsKnownDiscriminator(discriminator.GetString()))
+                    {
+                        errors.Add(new(string.IsNullOrEmpty(id) ? null : id, "malformed-known-block",
+                            $"A '{discriminator.GetString()}' block is missing required members."));
+                    }
+                    break;
             }
         }
 
@@ -138,6 +148,7 @@ public static partial class RichContentRules
         while (pending.TryPop(out var current))
         {
             var (node, depth, parent, withinLink) = current;
+            var textBytesBefore = textBytes;
             if (node is null)
             {
                 errors.Add(new(blockId, "null-node", "Nodes cannot be null."));
@@ -302,9 +313,13 @@ public static partial class RichContentRules
                 errors.Add(new(blockId, code, message));
             }
 
+            // Report only when this node crosses the budget, so later blocks do not repeat the error.
             if (textBytes > limits.TextBytes)
             {
-                errors.Add(new(blockId, "text-too-large", $"Total text may be at most {limits.TextBytes} bytes."));
+                if (textBytesBefore <= limits.TextBytes)
+                {
+                    errors.Add(new(blockId, "text-too-large", $"Total text may be at most {limits.TextBytes} bytes."));
+                }
                 return;
             }
 
