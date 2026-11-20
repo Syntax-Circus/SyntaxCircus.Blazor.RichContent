@@ -12,7 +12,7 @@
     {
         var index = i;
         var block = Blocks[index];
-        <section class="block" data-block-id="@block.Id" data-block-kind="@KindOf(block)">
+        <section class="block" @key="KeyFor(block, index)" data-block-id="@block.Id" data-block-kind="@KindOf(block)">
             <header>
                 <strong>@TitleOf(block)</strong>
                 <div class="actions">

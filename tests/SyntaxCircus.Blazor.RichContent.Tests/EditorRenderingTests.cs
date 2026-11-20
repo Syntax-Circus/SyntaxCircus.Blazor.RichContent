@@ -170,6 +170,28 @@ public sealed class EditorRenderingTests
     }
 
     [Fact]
+    public async Task Editor_DuplicateBlockIds_RendersWithoutThrowing()
+    {
+        var para = new RichTextNode(RichTextNodeKind.Paragraph);
+
+        var html = await RenderEditor(Doc(new RichTextBlock("same", [para]), new RichTextBlock("same", [para])));
+
+        Regex.Count(html, "data-block-id=\"same\"").ShouldBe(2);
+        html.ShouldContain("used more than once");
+    }
+
+    [Fact]
+    public async Task Editor_TableWithDefaultChildren_RendersWithoutThrowing()
+    {
+        var table = new RichTextNode(RichTextNodeKind.Table, Children: [new(RichTextNodeKind.TableRow), new(RichTextNodeKind.TableRow)]);
+
+        var html = await RenderEditor(Doc(new RichTextBlock("t", [table])));
+
+        html.ShouldContain("Add row");
+        ButtonDisabled(html, "Remove last column").ShouldBe(true);
+    }
+
+    [Fact]
     public async Task AddRichContent_WithoutAspNetCoreHost_ExtensionRendererFailureDoesNotThrow()
     {
         using var services = new ServiceCollection()

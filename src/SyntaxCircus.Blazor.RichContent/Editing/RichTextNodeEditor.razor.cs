@@ -25,7 +25,7 @@ public partial class RichTextNodeEditor
     // Table cells stay in step with the other rows, so they are edited through the table's own add/remove column.
     private bool CellsLocked => Node.Kind == RichTextNodeKind.TableRow;
 
-    private bool CanRemoveColumn => Children.Length > 0 && Children.All(row => row.Children.Length > 1);
+    private bool CanRemoveColumn => RichTextEditorOperations.CanRemoveTableColumn(Node);
 
     private Task Update(RichTextNode node) => NodeChanged.InvokeAsync(node);
 
@@ -57,31 +57,9 @@ public partial class RichTextNodeEditor
     private Task Add(RichTextNodeKind kind) =>
         Update(Node with { Children = RichTextEditorOperations.Append(Children, RichTextEditorOperations.Create(kind)) });
 
-    private Task AddRow()
-    {
-        var columns = Children.Length > 0 ? Math.Max(1, Children[0].Children.Length) : 2;
-        var row = new RichTextNode(
-            RichTextNodeKind.TableRow,
-            Children: [.. Enumerable.Range(0, columns).Select(_ => RichTextEditorOperations.Create(RichTextNodeKind.TableCell))]);
-        return Update(Node with { Children = RichTextEditorOperations.Append(Children, row) });
-    }
+    private Task AddRow() => Update(RichTextEditorOperations.AddTableRow(Node));
 
-    private Task AddColumn() =>
-        Update(Node with
-        {
-            Children =
-            [
-                .. Children.Select(row =>
-                {
-                    var cells = row.Children.IsDefault ? [] : row.Children;
-                    var header = cells.Length > 0 && cells[0].Header == true;
-                    return row with { Children = cells.Add(RichTextEditorOperations.Create(RichTextNodeKind.TableCell) with { Header = header }) };
-                }),
-            ],
-        });
+    private Task AddColumn() => Update(RichTextEditorOperations.AddTableColumn(Node));
 
-    private Task RemoveColumn() =>
-        CanRemoveColumn
-            ? Update(Node with { Children = [.. Children.Select(row => row with { Children = row.Children.RemoveAt(row.Children.Length - 1) })] })
-            : Task.CompletedTask;
+    private Task RemoveColumn() => Update(RichTextEditorOperations.RemoveTableColumn(Node));
 }

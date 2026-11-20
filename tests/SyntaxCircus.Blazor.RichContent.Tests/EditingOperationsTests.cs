@@ -126,6 +126,52 @@ public sealed class EditingOperationsTests
         RichTextEditorOperations.Move(list, 0, 1).ShouldBe([b, a]);
     }
 
+    private static RichTextNode Cell(bool header = false) => new(RichTextNodeKind.TableCell, Header: header);
+
+    [Fact]
+    public void Table_AddRowAndColumn_KeepRowsInStep()
+    {
+        var table = new RichTextNode(RichTextNodeKind.Table, Children:
+            [new(RichTextNodeKind.TableRow, Children: [Cell(true), Cell(true)]), new(RichTextNodeKind.TableRow, Children: [Cell(), Cell()])]);
+
+        var withRow = RichTextEditorOperations.AddTableRow(table);
+        var withColumn = RichTextEditorOperations.AddTableColumn(withRow);
+
+        withRow.Children.Length.ShouldBe(3);
+        withRow.Children[2].Children.Length.ShouldBe(2);
+        withColumn.Children.ShouldAllBe(row => row.Children.Length == 3);
+        withColumn.Children[0].Children[2].Header.ShouldBe(true);
+        withColumn.Children[1].Children[2].Header.ShouldBe(false);
+        RichTextEditorOperations.CanRemoveTableColumn(withColumn).ShouldBeTrue();
+        RichTextEditorOperations.RemoveTableColumn(withColumn).Children.ShouldAllBe(row => row.Children.Length == 2);
+    }
+
+    [Fact]
+    public void Table_Operations_TreatDefaultChildrenAsEmpty()
+    {
+        var bare = new RichTextNode(RichTextNodeKind.Table, Children: [new(RichTextNodeKind.TableRow), new(RichTextNodeKind.TableRow)]);
+        var noRows = new RichTextNode(RichTextNodeKind.Table);
+
+        RichTextEditorOperations.CanRemoveTableColumn(bare).ShouldBeFalse();
+        RichTextEditorOperations.CanRemoveTableColumn(noRows).ShouldBeFalse();
+        RichTextEditorOperations.RemoveTableColumn(bare).ShouldBe(bare);
+        RichTextEditorOperations.AddTableRow(bare).Children.Length.ShouldBe(3);
+        RichTextEditorOperations.AddTableRow(bare).Children[2].Children.Length.ShouldBe(1);
+        RichTextEditorOperations.AddTableRow(noRows).Children[0].Children.Length.ShouldBe(2);
+        RichTextEditorOperations.AddTableColumn(bare).Children.ShouldAllBe(row => row.Children.Length == 1);
+        RichTextEditorOperations.AddTableColumn(noRows).Children.IsEmpty.ShouldBeTrue();
+    }
+
+    [Fact]
+    public void Move_Remove_WorkOnAnyImmutableArray()
+    {
+        ImmutableArray<int> list = [1, 2, 3];
+
+        RichTextEditorOperations.Move(list, 0, 1).ShouldBe([2, 1, 3]);
+        RichTextEditorOperations.Remove(list, 9).ShouldBe(list);
+        RichTextEditorOperations.Remove(list, 1).ShouldBe([1, 3]);
+    }
+
     [Fact]
     public void Move_ClampsAtEdges()
     {

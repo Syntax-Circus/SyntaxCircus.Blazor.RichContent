@@ -44,19 +44,9 @@
     private Task CaptionChanged(int index, ChangeEventArgs e) =>
         Replace(index, Images[index] with { Caption = string.IsNullOrEmpty(e.Value?.ToString()) ? null : e.Value!.ToString() });
 
-    private Task Remove(int index) => Update(Images.RemoveAt(index));
+    private Task Remove(int index) => Update(RichTextEditorOperations.Remove(Images, index));
 
     private Task Add() => Update(Images.Add(new GalleryImage(new MediaRef(""), "", null)));
 
-    private Task Move(int index, int delta)
-    {
-        var target = Math.Clamp(index + delta, 0, Images.Length - 1);
-        if (target == index)
-        {
-            return Task.CompletedTask;
-        }
-
-        var image = Images[index];
-        return Update(Images.RemoveAt(index).Insert(target, image));
-    }
+    private Task Move(int index, int delta) => Update(RichTextEditorOperations.Move(Images, index, delta));
 }

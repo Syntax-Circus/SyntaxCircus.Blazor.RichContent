@@ -42,14 +42,14 @@ public static class RichTextEditorOperations
         (nodes.IsDefault ? [] : nodes).Add(node);
 
     /// <summary>Removes the node at <paramref name="index"/>; an out-of-range index leaves the list unchanged.</summary>
-    public static ImmutableArray<RichTextNode> Remove(ImmutableArray<RichTextNode> nodes, int index)
+    public static ImmutableArray<T> Remove<T>(ImmutableArray<T> nodes, int index)
     {
         nodes = nodes.IsDefault ? [] : nodes;
         return index < 0 || index >= nodes.Length ? nodes : nodes.RemoveAt(index);
     }
 
     /// <summary>Moves the node by <paramref name="delta"/> positions, clamping at either end.</summary>
-    public static ImmutableArray<RichTextNode> Move(ImmutableArray<RichTextNode> nodes, int index, int delta)
+    public static ImmutableArray<T> Move<T>(ImmutableArray<T> nodes, int index, int delta)
     {
         nodes = nodes.IsDefault ? [] : nodes;
         if (index < 0 || index >= nodes.Length)
@@ -66,6 +66,47 @@ public static class RichTextEditorOperations
         var item = nodes[index];
         return nodes.RemoveAt(index).Insert(target, item);
     }
+
+    /// <summary>Appends a row with as many cells as the first row (default arrays count as empty; at least one cell).</summary>
+    public static RichTextNode AddTableRow(RichTextNode table)
+    {
+        var rows = ChildrenOf(table);
+        var columns = rows.Length > 0 ? Math.Max(1, ChildrenOf(rows[0]).Length) : 2;
+        var row = new RichTextNode(
+            RichTextNodeKind.TableRow,
+            Children: [.. Enumerable.Range(0, columns).Select(_ => Create(RichTextNodeKind.TableCell))]);
+        return table with { Children = rows.Add(row) };
+    }
+
+    /// <summary>Appends a cell to every row, a header cell when that row's first cell is a header.</summary>
+    public static RichTextNode AddTableColumn(RichTextNode table) =>
+        table with
+        {
+            Children =
+            [
+                .. ChildrenOf(table).Select(row =>
+                {
+                    var cells = ChildrenOf(row);
+                    var header = cells.Length > 0 && cells[0].Header == true;
+                    return row with { Children = cells.Add(Create(RichTextNodeKind.TableCell) with { Header = header }) };
+                }),
+            ],
+        };
+
+    /// <summary>True when every row has more than one cell (and there is at least one row).</summary>
+    public static bool CanRemoveTableColumn(RichTextNode table)
+    {
+        var rows = ChildrenOf(table);
+        return rows.Length > 0 && rows.All(row => ChildrenOf(row).Length > 1);
+    }
+
+    /// <summary>Removes the last cell of every row; unchanged when <see cref="CanRemoveTableColumn"/> is false.</summary>
+    public static RichTextNode RemoveTableColumn(RichTextNode table) =>
+        CanRemoveTableColumn(table)
+            ? table with { Children = [.. ChildrenOf(table).Select(row => row with { Children = ChildrenOf(row).RemoveAt(ChildrenOf(row).Length - 1) })] }
+            : table;
+
+    private static ImmutableArray<RichTextNode> ChildrenOf(RichTextNode node) => node.Children.IsDefault ? [] : node.Children;
 
     /// <summary>
     /// Kinds that may be added directly inside <paramref name="parent"/>, mirroring <c>RichContentRules</c>.

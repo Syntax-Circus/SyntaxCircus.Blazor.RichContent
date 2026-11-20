@@ -72,6 +72,10 @@ public partial class ContentDocumentEditor
 
     private IReadOnlyList<RichContentError> ErrorsFor(string id) => [.. _errorsByBlock[id]];
 
+    // Duplicate keys throw, and duplicate ids are a validation error the editor must still display.
+    private object KeyFor(ContentBlock block, int index) =>
+        block.Id is not null && Blocks.Count(b => string.Equals(b.Id, block.Id, StringComparison.Ordinal)) == 1 ? block.Id : index;
+
     private Task Update(ContentDocument document) => DocumentChanged.InvokeAsync(document);
 
     private Task Replace(ContentBlock block) => Update(ContentDocumentOperations.Replace(Document, block));
