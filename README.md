@@ -60,7 +60,8 @@ Calling `AddRichContent` after `AddRazorComponents()` is recommended but not req
 fallback `IErrorBoundaryLogger` (via `TryAdd`) so hosts that use a bare `HtmlRenderer` without Razor components, such as
 RSS or email rendering, still work when an extension block fails. The only consequence of the order is which
 `IErrorBoundaryLogger` is used: whichever was registered first wins, so with `AddRazorComponents()` first, its logger is
-the one used.
+the one used. If you call `AddRichContent` first, the package fallback (which logs the failure through `ILogger`) is the
+registered boundary logger and the framework default may not replace it.
 
 Then render and edit:
 
@@ -192,7 +193,7 @@ node kinds and enum values). Readers behave as follows:
 
 Rich text and call-to-action URLs are validated: `https:` (host required, no user info), `mailto:`, `tel:`, or a
 root-relative path starting with a single `/` (not `//`). URLs are at most 2048 characters and may not contain
-whitespace, control characters or `\ < > " '`. Anything else is a validation error and the document will not render.
+whitespace, control characters or `\ < > " '`. Anything else is a validation error; the viewer skips only the block that carries it.
 
 The package does not know your site's host, so every absolute `https:` link is rendered with `rel="noopener"`.
 Root-relative links do not get it.
@@ -230,7 +231,7 @@ parameter of the view and editor, or to `Validate`). The defaults are blog-sized
 | --- | --- |
 | Rich text nodes | 4096 |
 | Nesting depth | 8 |
-| Total text | 256 KiB (UTF-8) |
+| Total text (including block titles and CTA text) | 256 KiB (UTF-8) |
 | Single code block | 32 KiB |
 | Blocks per document | 200 |
 | Heading levels | 2 to 4 |
@@ -238,6 +239,8 @@ parameter of the view and editor, or to `Validate`). The defaults are blog-sized
 | Gallery images | 24 |
 | Table size | 50 rows x 10 cells |
 | Image alt / caption | 300 characters |
+| Callout / gallery title, CTA heading and label | 200 characters |
+| CTA body | 1000 characters |
 | Extension `Data` | 16 KiB |
 
 ```csharp

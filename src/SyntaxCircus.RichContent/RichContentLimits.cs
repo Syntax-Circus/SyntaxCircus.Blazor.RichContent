@@ -16,6 +16,8 @@ public sealed record RichContentLimits(
     public const int MaximumHeadingLevel = 4;
     public const int AltCharacters = 300;
     public const int CaptionCharacters = 300;
+    public const int BlockTitleCharacters = 200;
+    public const int CtaBodyCharacters = 1000;
     public const int ExtensionDataBytes = 16 * 1024;
 
     public static RichContentLimits Default { get; } = new();

@@ -91,7 +91,7 @@ public static class ContentDocumentSerializer
                 var type = element.TryGetProperty("$block", out var t) && t.ValueKind == JsonValueKind.String ? t.GetString() : null;
                 if (type is not null && KnownBlocks.Contains(type))
                 {
-                    var block = TryBind(element);
+                    var block = DropNulls(TryBind(element));
                     if (block is not null && HasRequiredMembers(block))
                     {
                         blocks.Add(block);
@@ -124,6 +124,18 @@ public static class ContentDocumentSerializer
             return null;
         }
     }
+
+    // JSON null entries in node/image lists carry no data; dropping them keeps editors and renderers free of null checks.
+    private static ContentBlock? DropNulls(ContentBlock? block) => block switch
+    {
+        RichTextBlock b when !b.Nodes.IsDefault => b with { Nodes = DropNullNodes(b.Nodes) },
+        CalloutBlock b when !b.Nodes.IsDefault => b with { Nodes = DropNullNodes(b.Nodes) },
+        GalleryBlock b when !b.Images.IsDefault => b with { Images = [.. b.Images.Where(i => i is not null)] },
+        _ => block,
+    };
+
+    private static ImmutableArray<RichTextNode> DropNullNodes(ImmutableArray<RichTextNode> nodes) =>
+        [.. nodes.Where(n => n is not null).Select(n => n.Children.IsDefault ? n : n with { Children = DropNullNodes(n.Children) })];
 
     internal static bool IsKnownDiscriminator(string? type) => type is not null && KnownBlocks.Contains(type);
 

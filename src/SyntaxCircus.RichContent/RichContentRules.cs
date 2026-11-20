@@ -5,7 +5,7 @@ using System.Text.RegularExpressions;
 
 namespace SyntaxCircus.RichContent;
 
-public sealed record RichContentError(string? BlockId, string Code, string Message);
+public sealed record RichContentError(string? BlockId, string Code, string Message, int? BlockIndex = null);
 
 /// <summary>Structural and size validation for <see cref="ContentDocument"/> and rich-text trees.</summary>
 public static partial class RichContentRules
@@ -30,8 +30,9 @@ public static partial class RichContentRules
 
         var seen = new HashSet<string>(StringComparer.Ordinal);
         var textBytes = 0;
-        foreach (var block in blocks)
+        for (var blockIndex = 0; blockIndex < blocks.Length; blockIndex++)
         {
+            var block = blocks[blockIndex];
             var id = block.Id;
             var malformedKnown = block is UnknownBlock candidate && KnownDiscriminator(candidate) is not null;
             if (malformedKnown)
@@ -40,47 +41,51 @@ public static partial class RichContentRules
             }
             else if (string.IsNullOrEmpty(id) || !IdPattern().IsMatch(id))
             {
-                errors.Add(new(id, "invalid-block-id", "Block ids must match [a-z0-9-]{1,40}."));
+                errors.Add(new(id, "invalid-block-id", "Block ids must match [a-z0-9-]{1,40}.", blockIndex));
             }
             else if (!seen.Add(id))
             {
-                errors.Add(new(id, "duplicate-block-id", $"Block id '{id}' is used more than once."));
+                errors.Add(new(id, "duplicate-block-id", $"Block id '{id}' is used more than once.", blockIndex));
             }
 
             switch (block)
             {
                 case RichTextBlock rich:
-                    WalkNodes(rich.Nodes, id, limits, errors, ref textBytes);
+                    WalkNodes(rich.Nodes, id, blockIndex, limits, errors, ref textBytes);
                     break;
                 case CalloutBlock callout:
                     if (!Enum.IsDefined(callout.Tone))
                     {
-                        errors.Add(new(id, "invalid-callout-tone", "Callout tone is not recognised."));
+                        errors.Add(new(id, "invalid-callout-tone", "Callout tone is not recognised.", blockIndex));
                     }
-                    WalkNodes(callout.Nodes, id, limits, errors, ref textBytes);
+                    CheckBlockText(callout.Title, RichContentLimits.BlockTitleCharacters, "block-title-too-long", "A block title", id, blockIndex, limits, errors, ref textBytes);
+                    WalkNodes(callout.Nodes, id, blockIndex, limits, errors, ref textBytes);
                     break;
                 case GalleryBlock gallery:
-                    ValidateGallery(gallery, limits, errors);
+                    ValidateGallery(gallery, blockIndex, limits, errors, ref textBytes);
                     break;
                 case CtaBlock cta:
+                    CheckBlockText(cta.Heading, RichContentLimits.BlockTitleCharacters, "block-title-too-long", "A call to action heading", id, blockIndex, limits, errors, ref textBytes);
+                    CheckBlockText(cta.Body, RichContentLimits.CtaBodyCharacters, "cta-body-too-long", "A call to action body", id, blockIndex, limits, errors, ref textBytes);
+                    CheckBlockText(cta.Label, RichContentLimits.BlockTitleCharacters, "block-title-too-long", "A call to action label", id, blockIndex, limits, errors, ref textBytes);
                     if (string.IsNullOrWhiteSpace(cta.Label))
                     {
-                        errors.Add(new(id, "cta-label-required", "A call to action needs a label."));
+                        errors.Add(new(id, "cta-label-required", "A call to action needs a label.", blockIndex));
                     }
                     if (!RichContentUrl.IsSafe(cta.Url, limits.UrlCharacters))
                     {
-                        errors.Add(new(id, "unsafe-url", "The call to action URL is not allowed."));
+                        errors.Add(new(id, "unsafe-url", "The call to action URL is not allowed.", blockIndex));
                     }
                     break;
                 case ExtensionBlock extension:
                     if (string.IsNullOrEmpty(extension.Type) || !IdPattern().IsMatch(extension.Type))
                     {
-                        errors.Add(new(id, "invalid-extension-type", "Extension type must match [a-z0-9-]{1,40}."));
+                        errors.Add(new(id, "invalid-extension-type", "Extension type must match [a-z0-9-]{1,40}.", blockIndex));
                     }
                     if (extension.Data.ValueKind != JsonValueKind.Undefined
                         && Encoding.UTF8.GetByteCount(extension.Data.GetRawText()) > RichContentLimits.ExtensionDataBytes)
                     {
-                        errors.Add(new(id, "extension-data-too-large", $"Extension data may be at most {RichContentLimits.ExtensionDataBytes} bytes."));
+                        errors.Add(new(id, "extension-data-too-large", $"Extension data may be at most {RichContentLimits.ExtensionDataBytes} bytes.", blockIndex));
                     }
                     break;
                 case UnknownBlock unknown:
@@ -88,7 +93,7 @@ public static partial class RichContentRules
                     if (KnownDiscriminator(unknown) is { } discriminator)
                     {
                         errors.Add(new(string.IsNullOrEmpty(id) ? null : id, "malformed-known-block",
-                            $"A '{discriminator}' block is missing required members."));
+                            $"A '{discriminator}' block is missing required members.", blockIndex));
                     }
                     break;
             }
@@ -110,42 +115,72 @@ public static partial class RichContentRules
     {
         var errors = new List<RichContentError>();
         var textBytes = 0;
-        WalkNodes(nodes, blockId, limits ?? RichContentLimits.Default, errors, ref textBytes);
+        WalkNodes(nodes, blockId, null, limits ?? RichContentLimits.Default, errors, ref textBytes);
         return errors;
     }
 
-    private static void ValidateGallery(GalleryBlock gallery, RichContentLimits limits, List<RichContentError> errors)
+    // Block-level strings (titles, CTA text) count toward the document text budget and have their own length limits.
+    private static void CheckBlockText(string? value, int maxCharacters, string code, string what, string? blockId, int blockIndex,
+        RichContentLimits limits, List<RichContentError> errors, ref int textBytes)
+    {
+        if (value is null)
+        {
+            return;
+        }
+
+        if (value.Length > maxCharacters)
+        {
+            errors.Add(new(blockId, code, $"{what} may be at most {maxCharacters} characters.", blockIndex));
+        }
+
+        var before = textBytes;
+        textBytes += Encoding.UTF8.GetByteCount(value);
+        if (textBytes > limits.TextBytes && before <= limits.TextBytes)
+        {
+            errors.Add(new(blockId, "text-too-large", $"Total text may be at most {limits.TextBytes} bytes.", blockIndex));
+        }
+    }
+
+    private static void ValidateGallery(GalleryBlock gallery, int blockIndex, RichContentLimits limits, List<RichContentError> errors, ref int textBytes)
     {
         var id = gallery.Id;
         var images = gallery.Images.IsDefault ? [] : gallery.Images;
         if (images.Length is 0 || images.Length > limits.GalleryImages)
         {
-            errors.Add(new(id, "gallery-size", $"A gallery needs between 1 and {limits.GalleryImages} images."));
+            errors.Add(new(id, "gallery-size", $"A gallery needs between 1 and {limits.GalleryImages} images.", blockIndex));
         }
+
+        CheckBlockText(gallery.Title, RichContentLimits.BlockTitleCharacters, "block-title-too-long", "A block title", id, blockIndex, limits, errors, ref textBytes);
 
         foreach (var image in images)
         {
-            if (image?.Media is null || string.IsNullOrWhiteSpace(image.Media.Id))
+            if (image is null)
             {
-                errors.Add(new(id, "gallery-media-required", "Every gallery image needs a media reference."));
+                errors.Add(new(id, "null-image", "Gallery images cannot be null.", blockIndex));
+                continue;
             }
-            if (image is null || string.IsNullOrWhiteSpace(image.Alt) || image.Alt.Length > RichContentLimits.AltCharacters)
+
+            if (image.Media is null || string.IsNullOrWhiteSpace(image.Media.Id))
             {
-                errors.Add(new(id, "alt-required", $"Every gallery image needs alt text of at most {RichContentLimits.AltCharacters} characters."));
+                errors.Add(new(id, "gallery-media-required", "Every gallery image needs a media reference.", blockIndex));
             }
-            if (image?.Caption is { Length: > RichContentLimits.CaptionCharacters })
+            if (string.IsNullOrWhiteSpace(image.Alt) || image.Alt.Length > RichContentLimits.AltCharacters)
             {
-                errors.Add(new(id, "caption-too-long", $"Captions may be at most {RichContentLimits.CaptionCharacters} characters."));
+                errors.Add(new(id, "alt-required", $"Every gallery image needs alt text of at most {RichContentLimits.AltCharacters} characters.", blockIndex));
+            }
+            if (image.Caption is { Length: > RichContentLimits.CaptionCharacters })
+            {
+                errors.Add(new(id, "caption-too-long", $"Captions may be at most {RichContentLimits.CaptionCharacters} characters.", blockIndex));
             }
         }
     }
 
     // Iterative walk so excessive depth/count is rejected before any recursive renderer sees the tree.
-    private static void WalkNodes(ImmutableArray<RichTextNode> nodes, string? blockId, RichContentLimits limits, List<RichContentError> errors, ref int textBytes)
+    private static void WalkNodes(ImmutableArray<RichTextNode> nodes, string? blockId, int? blockIndex, RichContentLimits limits, List<RichContentError> errors, ref int textBytes)
     {
         if (nodes.IsDefault)
         {
-            errors.Add(new(blockId, "nodes-required", "Rich text nodes are required."));
+            errors.Add(new(blockId, "nodes-required", "Rich text nodes are required.", blockIndex));
             return;
         }
 
@@ -162,25 +197,25 @@ public static partial class RichContentRules
             var textBytesBefore = textBytes;
             if (node is null)
             {
-                errors.Add(new(blockId, "null-node", "Nodes cannot be null."));
+                errors.Add(new(blockId, "null-node", "Nodes cannot be null.", blockIndex));
                 continue;
             }
 
             if (++count > limits.Nodes)
             {
-                errors.Add(new(blockId, "too-many-nodes", $"Rich text may have at most {limits.Nodes} nodes."));
+                errors.Add(new(blockId, "too-many-nodes", $"Rich text may have at most {limits.Nodes} nodes.", blockIndex));
                 return;
             }
 
             if (depth > limits.Depth)
             {
-                errors.Add(new(blockId, "depth-exceeded", $"Rich text may be nested at most {limits.Depth} levels deep."));
+                errors.Add(new(blockId, "depth-exceeded", $"Rich text may be nested at most {limits.Depth} levels deep.", blockIndex));
                 return;
             }
 
             if (!Enum.IsDefined(node.Kind))
             {
-                errors.Add(new(blockId, "invalid-node-kind", "Node kind is not recognised."));
+                errors.Add(new(blockId, "invalid-node-kind", "Node kind is not recognised.", blockIndex));
                 continue;
             }
 
@@ -321,17 +356,13 @@ public static partial class RichContentRules
 
             foreach (var (code, message) in found)
             {
-                errors.Add(new(blockId, code, message));
+                errors.Add(new(blockId, code, message, blockIndex));
             }
 
-            // Report only when this node crosses the budget, so later blocks do not repeat the error.
-            if (textBytes > limits.TextBytes)
+            // Reported once, on the node that crosses the budget. The walk continues so structural checks still cover everything.
+            if (textBytes > limits.TextBytes && textBytesBefore <= limits.TextBytes)
             {
-                if (textBytesBefore <= limits.TextBytes)
-                {
-                    errors.Add(new(blockId, "text-too-large", $"Total text may be at most {limits.TextBytes} bytes."));
-                }
-                return;
+                errors.Add(new(blockId, "text-too-large", $"Total text may be at most {limits.TextBytes} bytes.", blockIndex));
             }
 
             var childWithinLink = withinLink || kind == RichTextNodeKind.Link;
