@@ -1,0 +1,24 @@
+<section class="gallery">
+    @if (!string.IsNullOrWhiteSpace(Block.Title))
+    {
+        <p class="gallery__title">@Block.Title</p>
+    }
+    <div class="gallery__items">
+        @foreach (var image in Block.Images.IsDefaultOrEmpty ? [] : Block.Images)
+        {
+            @Figure(image)
+        }
+    </div>
+</section>
+
+@code {
+    [Inject] private IServiceProvider Services { get; set; } = default!;
+
+    [Parameter, EditorRequired] public GalleryBlock Block { get; set; } = default!;
+
+    private RenderFragment Figure(GalleryImage image) =>
+        builder => ImageFigure.Build(builder, Resolve(image), image?.Alt, image?.Caption);
+
+    private ResolvedMedia? Resolve(GalleryImage image) =>
+        image?.Media is null ? null : ((IRichContentMediaResolver?)Services.GetService(typeof(IRichContentMediaResolver)))?.Resolve(image.Media);
+}

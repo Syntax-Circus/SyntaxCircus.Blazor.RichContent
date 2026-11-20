@@ -1,0 +1,15 @@
+<aside class="callout callout--@Block.Tone.ToString().ToLowerInvariant()">
+    @if (!string.IsNullOrWhiteSpace(Block.Title))
+    {
+        <p class="callout__title">@Block.Title</p>
+    }
+    <RichTextView Nodes="Block.Nodes" HeadingIds="HeadingIds" UrlCharacters="UrlCharacters" />
+</aside>
+
+@code {
+    [Parameter, EditorRequired] public CalloutBlock Block { get; set; } = default!;
+
+    [Parameter] public IReadOnlyDictionary<RichTextNode, string>? HeadingIds { get; set; }
+
+    [Parameter] public int UrlCharacters { get; set; } = RichContentLimits.Default.UrlCharacters;
+}

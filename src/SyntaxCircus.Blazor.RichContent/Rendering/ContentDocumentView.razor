@@ -1,0 +1,34 @@
+@if (_render)
+{
+    <div class="rich-content">
+        @for (var i = 0; i < _blocks.Length; i++)
+        {
+            var block = _blocks[i];
+            var key = _keys[i];
+            switch (block)
+            {
+                case RichTextBlock rich:
+                    <RichTextView @key="key" Nodes="rich.Nodes" HeadingIds="_headingIds" UrlCharacters="_urlCharacters" />
+                    break;
+                case CalloutBlock callout:
+                    <CalloutBlockView @key="key" Block="callout" HeadingIds="_headingIds" UrlCharacters="_urlCharacters" />
+                    break;
+                case GalleryBlock gallery:
+                    <GalleryBlockView @key="key" Block="gallery" />
+                    break;
+                case CtaBlock cta:
+                    <CtaBlockView @key="key" Block="cta" UrlCharacters="_urlCharacters" />
+                    break;
+                case ExtensionBlock extension when Registry.TryGet(extension.Type, out var registration):
+                    <ErrorBoundary @key="key">
+                        <ChildContent>
+                            <DynamicComponent Type="registration.Renderer" Parameters="ExtensionParameters(extension)" />
+                        </ChildContent>
+                        <ErrorContent></ErrorContent>
+                    </ErrorBoundary>
+                    break;
+                // UnknownBlock and unregistered extensions render nothing.
+            }
+        }
+    </div>
+}

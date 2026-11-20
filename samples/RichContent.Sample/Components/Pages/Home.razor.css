@@ -1,0 +1,14 @@
+.layout {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(22rem, 1fr));
+    gap: 1.5rem;
+    align-items: start;
+}
+
+.pane {
+    min-width: 0;
+}
+
+.status {
+    color: #8b2917;
+}

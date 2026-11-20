@@ -1,0 +1,32 @@
+@inject RichContentEditorOptions Options
+@if (Options.MediaPicker is { } picker)
+{
+    <ErrorBoundary>
+        <ChildContent>
+            <DynamicComponent Type="picker" Parameters="_parameters" />
+        </ChildContent>
+        <ErrorContent><small>This block's editor failed to load; the block is kept unchanged.</small></ErrorContent>
+    </ErrorBoundary>
+}
+else
+{
+    <small>No media picker is configured.</small>
+}
+
+@code {
+    private Dictionary<string, object?> _parameters = [];
+
+    [Parameter] public MediaRef? Value { get; set; }
+
+    [Parameter] public EventCallback<MediaRef?> ValueChanged { get; set; }
+
+    [Parameter] public bool Disabled { get; set; }
+
+    protected override void OnParametersSet() =>
+        _parameters = new()
+        {
+            [nameof(MediaPickerBase.Value)] = Value,
+            [nameof(MediaPickerBase.ValueChanged)] = ValueChanged,
+            [nameof(MediaPickerBase.Disabled)] = Disabled,
+        };
+}

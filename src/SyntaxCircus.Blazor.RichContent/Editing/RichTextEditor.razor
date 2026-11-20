@@ -1,0 +1,26 @@
+<div class="rt-editor" role="group" aria-label="@Label">
+    @for (var i = 0; i < Items.Length; i++)
+    {
+        var index = i;
+        @if (index > 0 && BetweenNodes is not null)
+        {
+            @BetweenNodes(index)
+        }
+        <div class="rt-block" data-node-index="@index">
+            <RichTextNodeEditor Node="Items[index]" NodeChanged="@(node => Replace(index, node))" Disabled="Disabled" Depth="1" MaxDepth="MaxDepth" />
+            <div class="actions">
+                <button type="button" disabled="@(Disabled || index == 0)" @onclick="() => Move(index, -1)">Move up</button>
+                <button type="button" disabled="@(Disabled || index == Items.Length - 1)" @onclick="() => Move(index, 1)">Move down</button>
+                <button type="button" disabled="@Disabled" @onclick="() => Remove(index)">Remove</button>
+            </div>
+        </div>
+    }
+    <div class="actions rt-add">
+        @foreach (var kind in AddKinds.Where(k => RichTextEditorOperations.ScaffoldDepth(k) <= MaxDepth))
+        {
+            var needsMedia = kind == RichTextNodeKind.Image;
+            var blocked = needsMedia && !HasMediaPicker;
+            <button type="button" disabled="@(Disabled || blocked)" title="@(blocked ? "No media picker is configured." : null)" @onclick="() => Add(kind)">Add @RichTextEditorOperations.Label(kind).ToLowerInvariant()</button>
+        }
+    </div>
+</div>
