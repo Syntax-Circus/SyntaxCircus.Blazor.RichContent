@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>RichContent.Sample</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\SyntaxCircus.Blazor.RichContent\SyntaxCircus.Blazor.RichContent.csproj" />
+  </ItemGroup>
+</Project>

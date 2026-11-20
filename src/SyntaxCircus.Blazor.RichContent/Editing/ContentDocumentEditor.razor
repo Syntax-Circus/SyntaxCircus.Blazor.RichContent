@@ -1,0 +1,76 @@
+<div class="doc-editor" role="group" aria-label="@Label">
+    @if (!HasMediaPicker)
+    {
+        <p class="hint">No media picker is configured, so images and galleries cannot be added.</p>
+    }
+    @foreach (var error in DocumentErrors)
+    {
+        <p class="error" role="alert">@error.Message</p>
+    }
+    @Menu(0, true, inserted => Update(ContentDocumentOperations.Add(Document, 0, inserted)))
+    @for (var i = 0; i < Blocks.Length; i++)
+    {
+        var index = i;
+        var block = Blocks[index];
+        <section class="block" data-block-id="@block.Id" data-block-kind="@KindOf(block)">
+            <header>
+                <strong>@TitleOf(block)</strong>
+                <div class="actions">
+                    <button type="button" disabled="@(Disabled || index == 0)" @onclick="() => Update(ContentDocumentOperations.Move(Document, block.Id, -1))">Move up</button>
+                    <button type="button" disabled="@(Disabled || index == Blocks.Length - 1)" @onclick="() => Update(ContentDocumentOperations.Move(Document, block.Id, 1))">Move down</button>
+                    <button type="button" disabled="@Disabled" @onclick="() => Update(ContentDocumentOperations.Remove(Document, block.Id))">Remove</button>
+                </div>
+            </header>
+            @switch (block)
+            {
+                case RichTextBlock rich:
+                    <RichTextEditor Nodes="rich.Nodes" NodesChanged="nodes => Replace(rich with { Nodes = nodes })" Disabled="Disabled" Label="Text block" MaxDepth="MaxDepth"
+                                    BetweenNodes="nodeIndex => Menu(nodeIndex, false, inserted => Update(ContentDocumentOperations.SplitRichText(Document, rich.Id, nodeIndex, inserted)))" />
+                    break;
+                case GalleryBlock gallery:
+                    <GalleryBlockEditor Block="gallery" BlockChanged="Replace" Disabled="Disabled" />
+                    break;
+                case CalloutBlock callout:
+                    <CalloutBlockEditor Block="callout" BlockChanged="Replace" Disabled="Disabled" />
+                    break;
+                case CtaBlock cta:
+                    <CtaBlockEditor Block="cta" BlockChanged="Replace" Disabled="Disabled" />
+                    break;
+                case ExtensionBlock extension when Registry.TryGet(extension.Type, out var registration) && registration.Editor is { } editor:
+                    <DynamicComponent Type="editor" Parameters="ExtensionParameters(extension)" />
+                    break;
+                case ExtensionBlock extension when Registry.TryGet(extension.Type, out _):
+                    <p class="preserved">This block has no editor (kept as-is).</p>
+                    <pre>@extension.Data.GetRawText()</pre>
+                    break;
+                default:
+                    <p class="preserved">This is an unsupported block (kept as-is). It is preserved when you save.</p>
+                    break;
+            }
+            @if (ErrorsFor(block.Id) is { Count: > 0 } errors)
+            {
+                <ul class="errors" role="alert">
+                    @foreach (var error in errors)
+                    {
+                        <li>@error.Message</li>
+                    }
+                </ul>
+            }
+        </section>
+        @Menu(index + 1, true, inserted => Update(ContentDocumentOperations.Add(Document, index + 1, inserted)))
+    }
+</div>
+
+@code {
+    private RenderFragment Menu(int position, bool includeText, Func<ContentBlock, Task> insert) =>
+        @<details class="insert-menu" data-position="@position">
+            <summary>Insert block</summary>
+            <div class="actions">
+                @foreach (var choice in Choices.Where(c => includeText || !c.IsText))
+                {
+                    var blocked = choice.NeedsMedia && !HasMediaPicker;
+                    <button type="button" disabled="@(Disabled || blocked)" title="@(blocked ? "No media picker is configured." : null)" @onclick="() => insert(choice.Create())">@choice.Label</button>
+                }
+            </div>
+        </details>;
+}

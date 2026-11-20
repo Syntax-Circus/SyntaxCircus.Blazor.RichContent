@@ -1,0 +1,88 @@
+<div class="node" data-node-kind="@Node.Kind">
+    <strong>@RichTextEditorOperations.Label(Node.Kind)</strong>
+    @switch (Node.Kind)
+    {
+        case RichTextNodeKind.Text:
+            <label>Text<textarea value="@Node.Text" @oninput="TextChanged" disabled="@Disabled" rows="3"></textarea></label>
+            break;
+        case RichTextNodeKind.InlineCode:
+            <label>Code<input type="text" value="@Node.Text" @oninput="TextChanged" disabled="@Disabled" spellcheck="false" /></label>
+            break;
+        case RichTextNodeKind.CodeBlock:
+            <label>Language
+                <select value="@(Node.Language ?? "")" @onchange="LanguageChanged" disabled="@Disabled">
+                    <option value="">Plain text</option>
+                    @foreach (var language in LanguageOptions)
+                    {
+                        <option value="@language">@language</option>
+                    }
+                </select>
+            </label>
+            <label>Code<textarea class="code" value="@Node.Text" @oninput="TextChanged" disabled="@Disabled" rows="8" spellcheck="false"></textarea></label>
+            break;
+        case RichTextNodeKind.Image:
+            <div class="field">Image <MediaPickerField Value="Node.Media" ValueChanged="MediaChanged" Disabled="Disabled" /></div>
+            <label>Alt text<input type="text" value="@Node.Alt" @oninput="AltChanged" disabled="@Disabled" /></label>
+            <label>Caption<input type="text" value="@Node.Caption" @oninput="CaptionChanged" disabled="@Disabled" /></label>
+            break;
+        default:
+            @if (Node.Kind == RichTextNodeKind.Link)
+            {
+                <label>Link address<input type="text" value="@Node.Url" @oninput="UrlChanged" disabled="@Disabled" /></label>
+            }
+            @if (Node.Kind == RichTextNodeKind.Heading)
+            {
+                <label>Heading level
+                    <select value="@(Node.HeadingLevel ?? 2)" @onchange="LevelChanged" disabled="@Disabled">
+                        <option value="2">Section heading</option>
+                        <option value="3">Subheading</option>
+                        <option value="4">Small heading</option>
+                    </select>
+                </label>
+            }
+            @if (Node.Kind == RichTextNodeKind.List)
+            {
+                <label class="check"><input type="checkbox" checked="@(Node.Ordered == true)" @onchange="OrderedChanged" disabled="@Disabled" />Numbered list</label>
+            }
+            @if (Depth >= MaxDepth)
+            {
+                <p>Maximum formatting depth reached.</p>
+            }
+            else
+            {
+                @for (var i = 0; i < Children.Length; i++)
+                {
+                    var index = i;
+                    <div class="child">
+                        <RichTextNodeEditor Node="Children[index]" NodeChanged="@(node => Replace(index, node))" Disabled="Disabled" Depth="@(Depth + 1)" MaxDepth="MaxDepth" />
+                        @if (!CellsLocked)
+                        {
+                            <div class="actions">
+                                <button type="button" disabled="@(Disabled || index == 0)" @onclick="() => Move(index, -1)">Move up</button>
+                                <button type="button" disabled="@(Disabled || index == Children.Length - 1)" @onclick="() => Move(index, 1)">Move down</button>
+                                <button type="button" disabled="@Disabled" @onclick="() => Remove(index)">Remove</button>
+                            </div>
+                        }
+                    </div>
+                }
+                @if (Node.Kind == RichTextNodeKind.Table)
+                {
+                    <div class="actions">
+                        <button type="button" disabled="@Disabled" @onclick="AddRow">Add row</button>
+                        <button type="button" disabled="@Disabled" @onclick="AddColumn">Add column</button>
+                        <button type="button" disabled="@(Disabled || !CanRemoveColumn)" @onclick="RemoveColumn">Remove last column</button>
+                    </div>
+                }
+                else if (!CellsLocked)
+                {
+                    <div class="actions">
+                        @foreach (var kind in RichTextEditorOperations.AllowedChildren(Node.Kind))
+                        {
+                            <button type="button" disabled="@Disabled" @onclick="() => Add(kind)">Add @RichTextEditorOperations.Label(kind).ToLowerInvariant()</button>
+                        }
+                    </div>
+                }
+            }
+            break;
+    }
+</div>

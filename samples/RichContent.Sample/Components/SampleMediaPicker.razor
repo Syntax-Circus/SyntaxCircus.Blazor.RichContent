@@ -1,0 +1,15 @@
+@namespace RichContent.Sample
+@inherits SyntaxCircus.Blazor.RichContent.Editing.MediaPickerBase
+@using SyntaxCircus.RichContent
+
+<select value="@(Value?.Id ?? "")" @onchange="Changed" disabled="@Disabled" aria-label="Choose image">
+    <option value="">(none)</option>
+    <option value="mountains">Mountains</option>
+    <option value="harbour">Harbour</option>
+    <option value="forest">Forest</option>
+</select>
+
+@code {
+    private Task Changed(ChangeEventArgs e) =>
+        ValueChanged.InvokeAsync(string.IsNullOrEmpty(e.Value?.ToString()) ? null : new MediaRef(e.Value!.ToString()!));
+}

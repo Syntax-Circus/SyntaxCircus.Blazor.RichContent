@@ -1,0 +1,62 @@
+@using System.Collections.Immutable
+@inject RichContentEditorOptions Options
+<div class="fields">
+    <label>Gallery title<input type="text" value="@Block.Title" @oninput="TitleChanged" disabled="@Disabled" /></label>
+    @for (var i = 0; i < Images.Length; i++)
+    {
+        var index = i;
+        <div class="child">
+            <div class="field">Image @(index + 1) <MediaPickerField Value="Images[index].Media" ValueChanged="media => MediaChanged(index, media)" Disabled="Disabled" /></div>
+            <label>Alt text<input type="text" value="@Images[index].Alt" @oninput="e => AltChanged(index, e)" disabled="@Disabled" /></label>
+            <label>Caption<input type="text" value="@Images[index].Caption" @oninput="e => CaptionChanged(index, e)" disabled="@Disabled" /></label>
+            <div class="actions">
+                <button type="button" disabled="@(Disabled || index == 0)" @onclick="() => Move(index, -1)">Move up</button>
+                <button type="button" disabled="@(Disabled || index == Images.Length - 1)" @onclick="() => Move(index, 1)">Move down</button>
+                <button type="button" disabled="@Disabled" @onclick="() => Remove(index)">Remove</button>
+            </div>
+        </div>
+    }
+    <div class="actions">
+        <button type="button" disabled="@(Disabled || Options.MediaPicker is null)" title="@(Options.MediaPicker is null ? "No media picker is configured." : null)" @onclick="Add">Add image</button>
+    </div>
+</div>
+
+@code {
+    [Parameter, EditorRequired] public GalleryBlock Block { get; set; } = default!;
+
+    [Parameter] public EventCallback<GalleryBlock> BlockChanged { get; set; }
+
+    [Parameter] public bool Disabled { get; set; }
+
+    private ImmutableArray<GalleryImage> Images => Block.Images.IsDefault ? [] : Block.Images;
+
+    private Task Update(ImmutableArray<GalleryImage> images) => BlockChanged.InvokeAsync(Block with { Images = images });
+
+    private Task TitleChanged(ChangeEventArgs e) =>
+        BlockChanged.InvokeAsync(Block with { Title = string.IsNullOrEmpty(e.Value?.ToString()) ? null : e.Value!.ToString() });
+
+    private Task Replace(int index, GalleryImage image) => Update(Images.SetItem(index, image));
+
+    private Task MediaChanged(int index, MediaRef? media) => Replace(index, Images[index] with { Media = media ?? new MediaRef("") });
+
+    private Task AltChanged(int index, ChangeEventArgs e) => Replace(index, Images[index] with { Alt = e.Value?.ToString() ?? "" });
+
+    private Task CaptionChanged(int index, ChangeEventArgs e) =>
+        Replace(index, Images[index] with { Caption = string.IsNullOrEmpty(e.Value?.ToString()) ? null : e.Value!.ToString() });
+
+    private Task Remove(int index) => Update(Images.RemoveAt(index));
+
+    private Task Add() => Update(Images.Add(new GalleryImage(new MediaRef(""), "", null)));
+
+    private Task Move(int index, int delta)
+    {
+        var target = Math.Clamp(index + delta, 0, Images.Length - 1);
+        if (target == index)
+        {
+            return Task.CompletedTask;
+        }
+
+        var image = Images[index];
+        return Update(Images.RemoveAt(index).Insert(target, image));
+    }
+}

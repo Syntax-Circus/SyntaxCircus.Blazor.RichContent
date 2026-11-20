@@ -1,0 +1,29 @@
+<div class="fields">
+    <label>Tone
+        <select value="@Block.Tone.ToString()" @onchange="ToneChanged" disabled="@Disabled">
+            @foreach (var tone in Enum.GetValues<CalloutTone>())
+            {
+                <option value="@tone.ToString()">@tone</option>
+            }
+        </select>
+    </label>
+    <label>Title<input type="text" value="@Block.Title" @oninput="TitleChanged" disabled="@Disabled" /></label>
+    <RichTextEditor Nodes="Block.Nodes" NodesChanged="NodesChanged" Disabled="Disabled" Label="Callout text" />
+</div>
+
+@code {
+    [Parameter, EditorRequired] public CalloutBlock Block { get; set; } = default!;
+
+    [Parameter] public EventCallback<CalloutBlock> BlockChanged { get; set; }
+
+    [Parameter] public bool Disabled { get; set; }
+
+    private Task ToneChanged(ChangeEventArgs e) =>
+        Enum.TryParse<CalloutTone>(e.Value?.ToString(), out var tone) ? BlockChanged.InvokeAsync(Block with { Tone = tone }) : Task.CompletedTask;
+
+    private Task TitleChanged(ChangeEventArgs e) =>
+        BlockChanged.InvokeAsync(Block with { Title = string.IsNullOrEmpty(e.Value?.ToString()) ? null : e.Value!.ToString() });
+
+    private Task NodesChanged(System.Collections.Immutable.ImmutableArray<RichTextNode> nodes) =>
+        BlockChanged.InvokeAsync(Block with { Nodes = nodes });
+}

@@ -1,0 +1,30 @@
+@page "/"
+@using SyntaxCircus.Blazor.RichContent.Editing
+@using SyntaxCircus.Blazor.RichContent.Rendering
+@using SyntaxCircus.RichContent
+
+<PageTitle>Rich content sample</PageTitle>
+
+<h1>Rich content sample</h1>
+
+<div class="layout">
+    <section class="pane">
+        <h2>Editor</h2>
+        <ContentDocumentEditor @bind-Document="_document" ErrorsChanged="OnErrors" />
+        @if (_errors.Count > 0)
+        {
+            <p class="status" role="status">@_errors.Count validation message(s); the preview shows nothing until they are resolved.</p>
+        }
+    </section>
+    <section class="pane">
+        <h2>Preview</h2>
+        <ContentDocumentView Document="_document" />
+    </section>
+</div>
+
+@code {
+    private ContentDocument _document = ContentDocument.Empty("start");
+    private IReadOnlyList<RichContentError> _errors = [];
+
+    private void OnErrors(IReadOnlyList<RichContentError> errors) => _errors = errors;
+}
