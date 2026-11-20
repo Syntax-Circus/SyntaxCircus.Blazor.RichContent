@@ -159,4 +159,17 @@ public sealed class BlockIdentityTests
         html.ShouldNotContain("Add italic");
         html.ShouldNotContain("Add bold");
     }
+
+    [Fact]
+    public async Task TopLevelAddMenus_RespectMaxDepth()
+    {
+        var doc = Doc(Rich("r", "x"), new CalloutBlock("c", CalloutTone.Info, null, [new RichTextNode(RichTextNodeKind.Paragraph, Children: [new RichTextNode(RichTextNodeKind.Text, Text: "y")])]));
+
+        var html = await Render<ContentDocumentEditor>(new() { ["Document"] = doc, ["Limits"] = RichContentLimits.Default with { Depth = 2 } });
+
+        html.ShouldContain("Add paragraph");
+        html.ShouldNotContain("Add list");
+        html.ShouldNotContain("Add table");
+        html.ShouldNotContain("Add quote");
+    }
 }

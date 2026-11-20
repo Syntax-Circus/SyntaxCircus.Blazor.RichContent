@@ -16,7 +16,7 @@
         </div>
     }
     <div class="actions rt-add">
-        @foreach (var kind in AddKinds)
+        @foreach (var kind in AddKinds.Where(k => RichTextEditorOperations.ScaffoldDepth(k) <= MaxDepth))
         {
             var needsMedia = kind == RichTextNodeKind.Image;
             var blocked = needsMedia && !HasMediaPicker;
