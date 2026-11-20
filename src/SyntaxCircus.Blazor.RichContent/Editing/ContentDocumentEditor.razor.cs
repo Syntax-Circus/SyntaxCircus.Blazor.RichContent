@@ -12,7 +12,7 @@ public partial class ContentDocumentEditor
 {
     private sealed record BlockChoice(string Label, bool NeedsMedia, bool IsText, Func<ContentBlock> Create);
 
-    private ILookup<string?, RichContentError> _errorsByBlock = Array.Empty<RichContentError>().ToLookup(e => e.BlockId);
+    private ILookup<int?, RichContentError> _errorsByBlock = Array.Empty<RichContentError>().ToLookup(e => e.BlockIndex);
     private IReadOnlyList<RichContentError> _errors = [];
     private IReadOnlyList<RichContentError> _lastPublished = [];
     private bool _errorsPublished;
@@ -42,7 +42,7 @@ public partial class ContentDocumentEditor
     private bool HasMediaPicker => Options.MediaPicker is not null;
 
     private IEnumerable<RichContentError> DocumentErrors =>
-        _errors.Where(e => e.BlockId is null || !Blocks.Any(b => string.Equals(b.Id, e.BlockId, StringComparison.Ordinal)));
+        _errors.Where(e => e.BlockIndex is null);
 
     private IEnumerable<BlockChoice> Choices
     {
@@ -71,7 +71,7 @@ public partial class ContentDocumentEditor
         _lastValidated = Document;
         _lastValidatedLimits = Limits;
         _errors = RichContentRules.Validate(Document, Limits);
-        _errorsByBlock = _errors.ToLookup(e => e.BlockId);
+        _errorsByBlock = _errors.ToLookup(e => e.BlockIndex);
         if (!_errorsPublished || !_errors.SequenceEqual(_lastPublished))
         {
             _errorsPublished = true;
@@ -80,7 +80,7 @@ public partial class ContentDocumentEditor
         }
     }
 
-    private IReadOnlyList<RichContentError> ErrorsFor(string id) => [.. _errorsByBlock[id]];
+    private IReadOnlyList<RichContentError> ErrorsFor(int index) => [.. _errorsByBlock[index]];
 
     // Duplicate keys throw, and duplicate ids are a validation error the editor must still display.
     private object KeyFor(ContentBlock block, int index) =>
@@ -88,12 +88,12 @@ public partial class ContentDocumentEditor
 
     private Task Update(ContentDocument document) => DocumentChanged.InvokeAsync(document);
 
-    private Task Replace(ContentBlock block) => Update(ContentDocumentOperations.Replace(Document, block));
+    private Task Replace(int index, ContentBlock block) => Update(ContentDocumentOperations.Replace(Document, index, block));
 
-    private Dictionary<string, object?> ExtensionParameters(ExtensionBlock extension) => new()
+    private Dictionary<string, object?> ExtensionParameters(ExtensionBlock extension, int index) => new()
     {
         [nameof(ExtensionBlockEditorBase.Data)] = extension.Data,
-        [nameof(ExtensionBlockEditorBase.DataChanged)] = EventCallback.Factory.Create<System.Text.Json.JsonElement>(this, data => Replace(extension with { Data = data })),
+        [nameof(ExtensionBlockEditorBase.DataChanged)] = EventCallback.Factory.Create<System.Text.Json.JsonElement>(this, data => Replace(index, extension with { Data = data })),
         [nameof(ExtensionBlockEditorBase.Disabled)] = Disabled,
     };
 

@@ -4,7 +4,11 @@ using SyntaxCircus.RichContent;
 
 namespace SyntaxCircus.Blazor.RichContent.Editing;
 
-/// <summary>Pure operations over a <see cref="ContentDocument"/>'s blocks. Every block type, including unknown ones, is carried through untouched.</summary>
+/// <summary>
+/// Pure operations over a <see cref="ContentDocument"/>'s blocks. Every block type, including unknown ones, is carried through untouched.
+/// The id-based overloads act on the first block with that id; the index-based overloads act on exactly the block at that position
+/// (use them whenever ids may be duplicated or empty).
+/// </summary>
 public static class ContentDocumentOperations
 {
     private const string Alphabet = "0123456789abcdefghijklmnopqrstuvwxyz";
@@ -26,20 +30,26 @@ public static class ContentDocumentOperations
         return doc with { Blocks = blocks.Insert(Math.Clamp(index, 0, blocks.Length), block) };
     }
 
-    /// <summary>Replaces the block with the same id; unchanged when no block has that id.</summary>
-    public static ContentDocument Replace(ContentDocument doc, ContentBlock block)
+    /// <summary>Replaces the first block with the same id; unchanged when no block has that id.</summary>
+    public static ContentDocument Replace(ContentDocument doc, ContentBlock block) =>
+        Replace(doc, IndexOf(BlocksOf(doc), block.Id), block);
+
+    /// <summary>Replaces the block at <paramref name="index"/>; unchanged when the index is out of range.</summary>
+    public static ContentDocument Replace(ContentDocument doc, int index, ContentBlock block)
     {
         var blocks = BlocksOf(doc);
-        var index = IndexOf(blocks, block.Id);
-        return index < 0 ? doc : doc with { Blocks = blocks.SetItem(index, block) };
+        return InRange(blocks, index) ? doc with { Blocks = blocks.SetItem(index, block) } : doc;
     }
 
-    /// <summary>Removes a block. Removing the last one leaves a document with a single empty rich-text block.</summary>
-    public static ContentDocument Remove(ContentDocument doc, string blockId)
+    /// <summary>Removes the first block with this id. Removing the last block leaves a document with a single empty rich-text block.</summary>
+    public static ContentDocument Remove(ContentDocument doc, string blockId) =>
+        Remove(doc, IndexOf(BlocksOf(doc), blockId));
+
+    /// <summary>Removes the block at <paramref name="index"/>; unchanged when out of range. Removing the last block leaves a single empty rich-text block.</summary>
+    public static ContentDocument Remove(ContentDocument doc, int index)
     {
         var blocks = BlocksOf(doc);
-        var index = IndexOf(blocks, blockId);
-        if (index < 0)
+        if (!InRange(blocks, index))
         {
             return doc;
         }
@@ -48,12 +58,15 @@ public static class ContentDocumentOperations
         return remaining.IsEmpty ? ContentDocument.Empty(NewBlockId()) : doc with { Blocks = remaining };
     }
 
-    /// <summary>Moves a block by <paramref name="delta"/> positions, clamping at either end.</summary>
-    public static ContentDocument Move(ContentDocument doc, string blockId, int delta)
+    /// <summary>Moves the first block with this id by <paramref name="delta"/> positions, clamping at either end.</summary>
+    public static ContentDocument Move(ContentDocument doc, string blockId, int delta) =>
+        Move(doc, IndexOf(BlocksOf(doc), blockId), delta);
+
+    /// <summary>Moves the block at <paramref name="index"/> by <paramref name="delta"/> positions, clamping at either end.</summary>
+    public static ContentDocument Move(ContentDocument doc, int index, int delta)
     {
         var blocks = BlocksOf(doc);
-        var index = IndexOf(blocks, blockId);
-        if (index < 0)
+        if (!InRange(blocks, index))
         {
             return doc;
         }
@@ -69,15 +82,20 @@ public static class ContentDocumentOperations
     }
 
     /// <summary>
-    /// Splits a rich-text block before node <paramref name="nodeIndex"/> and puts <paramref name="insert"/> between the halves.
-    /// The first half keeps the original id, the second gets a new one; an empty half is dropped.
-    /// Unchanged when the block is missing or is not rich text.
+    /// Splits the first rich-text block with this id before node <paramref name="nodeIndex"/>; see the index-based overload.
     /// </summary>
-    public static ContentDocument SplitRichText(ContentDocument doc, string blockId, int nodeIndex, ContentBlock insert)
+    public static ContentDocument SplitRichText(ContentDocument doc, string blockId, int nodeIndex, ContentBlock insert) =>
+        SplitRichText(doc, IndexOf(BlocksOf(doc), blockId), nodeIndex, insert);
+
+    /// <summary>
+    /// Splits the rich-text block at <paramref name="index"/> before node <paramref name="nodeIndex"/> and puts <paramref name="insert"/> between the halves.
+    /// The first half keeps the original id, the second gets a new one; an empty half is dropped.
+    /// Unchanged when the index is out of range or the block is not rich text.
+    /// </summary>
+    public static ContentDocument SplitRichText(ContentDocument doc, int index, int nodeIndex, ContentBlock insert)
     {
         var blocks = BlocksOf(doc);
-        var index = IndexOf(blocks, blockId);
-        if (index < 0 || blocks[index] is not RichTextBlock rich)
+        if (!InRange(blocks, index) || blocks[index] is not RichTextBlock rich)
         {
             return doc;
         }
@@ -100,6 +118,8 @@ public static class ContentDocumentOperations
     }
 
     private static ImmutableArray<ContentBlock> BlocksOf(ContentDocument doc) => doc.Blocks.IsDefault ? [] : doc.Blocks;
+
+    private static bool InRange(ImmutableArray<ContentBlock> blocks, int index) => index >= 0 && index < blocks.Length;
 
     private static int IndexOf(ImmutableArray<ContentBlock> blocks, string blockId)
     {

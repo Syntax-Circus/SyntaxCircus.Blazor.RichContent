@@ -76,7 +76,7 @@
                 else if (!CellsLocked)
                 {
                     <div class="actions">
-                        @foreach (var kind in RichTextEditorOperations.AllowedChildren(Node.Kind))
+                        @foreach (var kind in RichTextEditorOperations.AllowedChildren(Node.Kind).Where(k => RichTextEditorOperations.ScaffoldDepth(k) <= MaxDepth - Depth))
                         {
                             <button type="button" disabled="@Disabled" @onclick="() => Add(kind)">Add @RichTextEditorOperations.Label(kind).ToLowerInvariant()</button>
                         }

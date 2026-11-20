@@ -18,30 +18,30 @@
             <header>
                 <strong>@TitleOf(block)</strong>
                 <div class="actions">
-                    <button type="button" disabled="@(Disabled || index == 0)" @onclick="() => Update(ContentDocumentOperations.Move(Document, block.Id, -1))">Move up</button>
-                    <button type="button" disabled="@(Disabled || index == Blocks.Length - 1)" @onclick="() => Update(ContentDocumentOperations.Move(Document, block.Id, 1))">Move down</button>
-                    <button type="button" disabled="@Disabled" @onclick="() => Update(ContentDocumentOperations.Remove(Document, block.Id))">Remove</button>
+                    <button type="button" disabled="@(Disabled || index == 0)" @onclick="() => Update(ContentDocumentOperations.Move(Document, index, -1))">Move up</button>
+                    <button type="button" disabled="@(Disabled || index == Blocks.Length - 1)" @onclick="() => Update(ContentDocumentOperations.Move(Document, index, 1))">Move down</button>
+                    <button type="button" disabled="@Disabled" @onclick="() => Update(ContentDocumentOperations.Remove(Document, index))">Remove</button>
                 </div>
             </header>
             @switch (block)
             {
                 case RichTextBlock rich:
-                    <RichTextEditor Nodes="rich.Nodes" NodesChanged="nodes => Replace(rich with { Nodes = nodes })" Disabled="Disabled" Label="Text block" MaxDepth="MaxDepth"
-                                    BetweenNodes="nodeIndex => Menu(nodeIndex, false, inserted => Update(ContentDocumentOperations.SplitRichText(Document, rich.Id, nodeIndex, inserted)))" />
+                    <RichTextEditor Nodes="rich.Nodes" NodesChanged="nodes => Replace(index, rich with { Nodes = nodes })" Disabled="Disabled" Label="Text block" MaxDepth="MaxDepth"
+                                    BetweenNodes="nodeIndex => Menu(nodeIndex, false, inserted => Update(ContentDocumentOperations.SplitRichText(Document, index, nodeIndex, inserted)))" />
                     break;
                 case GalleryBlock gallery:
-                    <GalleryBlockEditor Block="gallery" BlockChanged="Replace" Disabled="Disabled" />
+                    <GalleryBlockEditor Block="gallery" BlockChanged="updated => Replace(index, updated)" Disabled="Disabled" />
                     break;
                 case CalloutBlock callout:
-                    <CalloutBlockEditor Block="callout" BlockChanged="Replace" Disabled="Disabled" MaxDepth="MaxDepth" />
+                    <CalloutBlockEditor Block="callout" BlockChanged="updated => Replace(index, updated)" Disabled="Disabled" MaxDepth="MaxDepth" />
                     break;
                 case CtaBlock cta:
-                    <CtaBlockEditor Block="cta" BlockChanged="Replace" Disabled="Disabled" />
+                    <CtaBlockEditor Block="cta" BlockChanged="updated => Replace(index, updated)" Disabled="Disabled" />
                     break;
                 case ExtensionBlock extension when Registry.TryGet(extension.Type, out var registration) && registration.Editor is { } editor:
                     <ErrorBoundary>
                         <ChildContent>
-                            <DynamicComponent Type="editor" Parameters="ExtensionParameters(extension)" />
+                            <DynamicComponent Type="editor" Parameters="ExtensionParameters(extension, index)" />
                         </ChildContent>
                         <ErrorContent><p class="preserved">This block's editor failed to load; the block is kept unchanged.</p></ErrorContent>
                     </ErrorBoundary>
@@ -54,7 +54,7 @@
                     <p class="preserved">This is an unsupported block (kept as-is). It is preserved when you save.</p>
                     break;
             }
-            @if (ErrorsFor(block.Id) is { Count: > 0 } errors)
+            @if (ErrorsFor(index) is { Count: > 0 } errors)
             {
                 <ul class="errors" role="alert">
                     @foreach (var error in errors)

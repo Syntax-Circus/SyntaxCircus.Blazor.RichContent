@@ -37,11 +37,11 @@ public partial class ContentDocumentView
         _urlCharacters = (Limits ?? RichContentLimits.Default).UrlCharacters;
         var all = Document.Blocks.IsDefault ? [] : Document.Blocks;
         var errors = RichContentRules.Validate(Document, Limits);
-        var failing = errors.Where(e => e.BlockId is not null).Select(e => e.BlockId!).ToHashSet(StringComparer.Ordinal);
-        _blocks = [.. all.Where(b => b.Id is null || !failing.Contains(b.Id))];
+        var failing = errors.Where(e => e.BlockIndex is not null).Select(e => e.BlockIndex!.Value).ToHashSet();
+        _blocks = [.. all.Where((_, index) => !failing.Contains(index))];
         if (_blocks.Length != all.Length)
         {
-            LogSkipped(errors.Where(e => e.BlockId is not null));
+            LogSkipped(errors.Where(e => e.BlockIndex is not null));
         }
 
         _keys = [.. _blocks.Select((b, index) =>

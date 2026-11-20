@@ -38,6 +38,12 @@ public static class RichTextEditorOperations
     private static RichTextNode Cell(bool header) =>
         new(RichTextNodeKind.TableCell, Header: header, Children: [Create(RichTextNodeKind.Text)]);
 
+    /// <summary>Levels of nesting <see cref="Create"/> produces for <paramref name="kind"/> (a leaf is 1).</summary>
+    public static int ScaffoldDepth(RichTextNodeKind kind) => DepthOf(Create(kind));
+
+    private static int DepthOf(RichTextNode node) =>
+        1 + (node.Children.IsDefaultOrEmpty ? 0 : node.Children.Max(DepthOf));
+
     public static ImmutableArray<RichTextNode> Append(ImmutableArray<RichTextNode> nodes, RichTextNode node) =>
         (nodes.IsDefault ? [] : nodes).Add(node);
 
