@@ -14,5 +14,6 @@
   </Folder>
   <Project Path="src/SyntaxCircus.RichContent/SyntaxCircus.RichContent.csproj" />
   <Project Path="src/SyntaxCircus.Blazor.RichContent/SyntaxCircus.Blazor.RichContent.csproj" />
+  <Project Path="tests/SyntaxCircus.Blazor.RichContent.Tests/SyntaxCircus.Blazor.RichContent.Tests.csproj" />
   <Project Path="tests/SyntaxCircus.RichContent.Tests/SyntaxCircus.RichContent.Tests.csproj" />
 </Solution>

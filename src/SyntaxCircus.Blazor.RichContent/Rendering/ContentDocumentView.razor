@@ -1,0 +1,27 @@
+@if (_render)
+{
+    <div class="rich-content">
+        @foreach (var block in _blocks)
+        {
+            switch (block)
+            {
+                case RichTextBlock rich:
+                    <RichTextView Nodes="rich.Nodes" HeadingIds="_headingIds" />
+                    break;
+                case CalloutBlock callout:
+                    <CalloutBlockView Block="callout" HeadingIds="_headingIds" />
+                    break;
+                case GalleryBlock gallery:
+                    <GalleryBlockView Block="gallery" />
+                    break;
+                case CtaBlock cta:
+                    <CtaBlockView Block="cta" />
+                    break;
+                case ExtensionBlock extension when Registry.TryGet(extension.Type, out var registration):
+                    <DynamicComponent Type="registration.Renderer" Parameters="ExtensionParameters(extension)" />
+                    break;
+                // UnknownBlock and unregistered extensions render nothing.
+            }
+        }
+    </div>
+}

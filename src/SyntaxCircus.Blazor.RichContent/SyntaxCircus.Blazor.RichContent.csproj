@@ -20,6 +20,7 @@
   </PropertyGroup>
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <PackageReference Include="ColorCode.HTML" />
     <PackageReference Include="GitVersion.MsBuild" PrivateAssets="all" />
   </ItemGroup>
   <ItemGroup>

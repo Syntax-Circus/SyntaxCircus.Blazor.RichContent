@@ -1,0 +1,13 @@
+.rich-content ::deep img {
+    max-width: 100%;
+    height: auto;
+}
+
+.rich-content ::deep pre {
+    overflow-x: auto;
+}
+
+.rich-content ::deep table {
+    border-collapse: collapse;
+    max-width: 100%;
+}

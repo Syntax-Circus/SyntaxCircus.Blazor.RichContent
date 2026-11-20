@@ -1,0 +1,15 @@
+<section class="cta">
+    <p class="cta__heading">@Block.Heading</p>
+    @if (!string.IsNullOrWhiteSpace(Block.Body))
+    {
+        <p class="cta__body">@Block.Body</p>
+    }
+    @if (RichContentUrl.IsSafe(Block.Url))
+    {
+        <a class="cta__button" href="@Block.Url" rel="@(RichTextView.IsExternal(Block.Url) ? "noopener" : null)">@Block.Label</a>
+    }
+</section>
+
+@code {
+    [Parameter, EditorRequired] public CtaBlock Block { get; set; } = default!;
+}
