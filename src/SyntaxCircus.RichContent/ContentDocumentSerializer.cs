@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -7,7 +8,12 @@ namespace SyntaxCircus.RichContent;
 
 public static class ContentDocumentSerializer
 {
-    private static readonly HashSet<string> KnownBlocks = ["rich-text", "gallery", "callout", "cta", "extension"];
+    // Single source of truth: the [JsonDerivedType] discriminators declared on ContentBlock.
+    private static readonly HashSet<string> KnownBlocks = typeof(ContentBlock)
+        .GetCustomAttributes<JsonDerivedTypeAttribute>()
+        .Select(a => a.TypeDiscriminator as string)
+        .OfType<string>()
+        .ToHashSet(StringComparer.Ordinal);
 
     public static JsonSerializerOptions Options { get; } = CreateOptions();
 
@@ -29,7 +35,7 @@ public static class ContentDocumentSerializer
             writer.WriteStartObject();
             writer.WriteNumber("schemaVersion", document.SchemaVersion);
             writer.WriteStartArray("blocks");
-            foreach (var block in document.Blocks)
+            foreach (var block in document.Blocks.IsDefault ? [] : document.Blocks)
             {
                 if (block is UnknownBlock unknown)
                 {
@@ -37,7 +43,7 @@ public static class ContentDocumentSerializer
                 }
                 else
                 {
-                    JsonSerializer.Serialize<ContentBlock>(writer, block, Options);
+                    JsonSerializer.Serialize(writer, Normalize(block), Options);
                 }
             }
             writer.WriteEndArray();
@@ -86,17 +92,15 @@ public static class ContentDocumentSerializer
                 if (type is not null && KnownBlocks.Contains(type))
                 {
                     var block = element.Deserialize<ContentBlock>(Options);
-                    if (block is null)
+                    if (block is not null && HasRequiredMembers(block))
                     {
-                        return Fail("Block could not be read.");
+                        blocks.Add(block);
+                        continue;
                     }
-                    blocks.Add(block);
                 }
-                else
-                {
-                    var id = element.TryGetProperty("id", out var i) && i.ValueKind == JsonValueKind.String ? i.GetString() ?? "" : "";
-                    blocks.Add(new UnknownBlock(id, element.Clone()));
-                }
+
+                var id = element.TryGetProperty("id", out var i) && i.ValueKind == JsonValueKind.String ? i.GetString() ?? "" : "";
+                blocks.Add(new UnknownBlock(id, element.Clone()));
             }
 
             return new ContentDocumentReadResult(new ContentDocument(schemaVersion, blocks.ToImmutable()), null);
@@ -106,6 +110,24 @@ public static class ContentDocumentSerializer
             return Fail($"Invalid content JSON: {ex.Message}");
         }
     }
+
+    private static bool HasRequiredMembers(ContentBlock block) => block.Id is not null && block switch
+    {
+        RichTextBlock b => !b.Nodes.IsDefault,
+        CalloutBlock b => !b.Nodes.IsDefault,
+        GalleryBlock b => !b.Images.IsDefault,
+        ExtensionBlock b => b.Type is not null && b.Data.ValueKind != JsonValueKind.Undefined,
+        _ => true,
+    };
+
+    // Hand-built documents may carry default (uninitialized) ImmutableArrays, which cannot be serialized.
+    private static ContentBlock Normalize(ContentBlock block) => block switch
+    {
+        RichTextBlock b when b.Nodes.IsDefault => b with { Nodes = [] },
+        CalloutBlock b when b.Nodes.IsDefault => b with { Nodes = [] },
+        GalleryBlock b when b.Images.IsDefault => b with { Images = [] },
+        _ => block,
+    };
 
     private static ContentDocumentReadResult Fail(string error) => new(null, error);
 }

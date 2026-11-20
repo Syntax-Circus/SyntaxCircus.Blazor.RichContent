@@ -126,4 +126,35 @@ public class ContentDocumentSerializerTests
         block.Id.ShouldBe("first");
         block.Nodes.ShouldBeEmpty();
     }
+
+    [Theory]
+    [InlineData("""{"$block":"rich-text"}""")]
+    [InlineData("""{"$block":"rich-text","id":"a"}""")]
+    [InlineData("""{"$block":"rich-text","nodes":[]}""")]
+    [InlineData("""{"$block":"callout","id":"a","tone":"info"}""")]
+    [InlineData("""{"$block":"gallery","id":"a"}""")]
+    [InlineData("""{"$block":"extension","id":"a","type":"x"}""")]
+    [InlineData("""{"$block":"extension","id":"a","data":{}}""")]
+    public void Deserialize_KnownBlockMissingRequiredMembers_BecomesUnknownBlock(string blockJson)
+    {
+        var result = ContentDocumentSerializer.Deserialize($$"""{"schemaVersion":1,"blocks":[{{blockJson}}]}""");
+
+        result.Error.ShouldBeNull();
+        var block = result.Document!.Blocks.ShouldHaveSingleItem().ShouldBeOfType<UnknownBlock>();
+        block.Raw.GetProperty("$block").GetString().ShouldNotBeNull();
+    }
+
+    [Fact]
+    public void Serialize_BlockWithDefaultArrays_Succeeds()
+    {
+        var document = new ContentDocument(1, [
+            new RichTextBlock("a", default),
+            new CalloutBlock("b", CalloutTone.Info, null, default),
+            new GalleryBlock("c", default, null)]);
+
+        var result = ContentDocumentSerializer.Deserialize(ContentDocumentSerializer.Serialize(document));
+
+        result.Error.ShouldBeNull();
+        result.Document!.Blocks.Length.ShouldBe(3);
+    }
 }
