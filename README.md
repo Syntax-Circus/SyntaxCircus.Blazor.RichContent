@@ -1,5 +1,10 @@
 # SyntaxCircus.Blazor.RichContent
 
+[![Build](https://github.com/Syntax-Circus/SyntaxCircus.Blazor.RichContent/actions/workflows/build.yml/badge.svg)](https://github.com/Syntax-Circus/SyntaxCircus.Blazor.RichContent/actions/workflows/build.yml)
+[![NuGet: SyntaxCircus.RichContent](https://img.shields.io/nuget/v/SyntaxCircus.RichContent.svg?label=SyntaxCircus.RichContent)](https://www.nuget.org/packages/SyntaxCircus.RichContent)
+[![NuGet: SyntaxCircus.Blazor.RichContent](https://img.shields.io/nuget/v/SyntaxCircus.Blazor.RichContent.svg?label=SyntaxCircus.Blazor.RichContent)](https://www.nuget.org/packages/SyntaxCircus.Blazor.RichContent)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 Block-based rich content for Blazor apps, shipped as two NuGet packages that share one version:
 
 - **SyntaxCircus.RichContent** - the framework-free document model (`ContentDocument`, blocks, rich text nodes), the
