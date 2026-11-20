@@ -1,7 +1,12 @@
 @inject RichContentEditorOptions Options
 @if (Options.MediaPicker is { } picker)
 {
-    <DynamicComponent Type="picker" Parameters="_parameters" />
+    <ErrorBoundary>
+        <ChildContent>
+            <DynamicComponent Type="picker" Parameters="_parameters" />
+        </ChildContent>
+        <ErrorContent><small>This block's editor failed to load; the block is kept unchanged.</small></ErrorContent>
+    </ErrorBoundary>
 }
 else
 {

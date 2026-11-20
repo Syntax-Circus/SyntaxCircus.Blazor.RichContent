@@ -16,6 +16,8 @@ public partial class ContentDocumentEditor
     private IReadOnlyList<RichContentError> _errors = [];
     private IReadOnlyList<RichContentError> _lastPublished = [];
     private bool _errorsPublished;
+    private ContentDocument? _lastValidated;
+    private RichContentLimits? _lastValidatedLimits;
 
     [Inject] private ContentBlockRegistry Registry { get; set; } = default!;
 
@@ -33,7 +35,7 @@ public partial class ContentDocumentEditor
 
     [Parameter] public EventCallback<IReadOnlyList<RichContentError>> ErrorsChanged { get; set; }
 
-    private ImmutableArray<ContentBlock> Blocks => Document.Blocks.IsDefault ? [] : Document.Blocks;
+    private ImmutableArray<ContentBlock> Blocks => Document?.Blocks.IsDefault ?? true ? [] : Document.Blocks;
 
     private int MaxDepth => (Limits ?? RichContentLimits.Default).Depth;
 
@@ -60,6 +62,14 @@ public partial class ContentDocumentEditor
 
     protected override async Task OnParametersSetAsync()
     {
+        // Validation walks the whole tree; skip it when neither the (immutable) document nor the limits changed.
+        if (Document is null || (ReferenceEquals(Document, _lastValidated) && Equals(Limits, _lastValidatedLimits)))
+        {
+            return;
+        }
+
+        _lastValidated = Document;
+        _lastValidatedLimits = Limits;
         _errors = RichContentRules.Validate(Document, Limits);
         _errorsByBlock = _errors.ToLookup(e => e.BlockId);
         if (!_errorsPublished || !_errors.SequenceEqual(_lastPublished))

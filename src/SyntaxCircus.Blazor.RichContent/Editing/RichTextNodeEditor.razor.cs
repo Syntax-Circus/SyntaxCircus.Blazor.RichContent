@@ -8,7 +8,11 @@ namespace SyntaxCircus.Blazor.RichContent.Editing;
 public partial class RichTextNodeEditor
 {
     private static readonly string[] LanguageOptions =
-        ["csharp", "javascript", "typescript", "html", "xml", "css", "sql", "powershell", "python", "java", "cpp", "fsharp", "php", "json", "bash", "yaml"];
+        ["csharp", "javascript", "typescript", "html", "xml", "css", "sql", "powershell", "python", "java", "cpp", "fsharp", "php"];
+
+    // Aliases (cs, js, ...) are accepted by the highlighter but listed once, under their canonical name.
+    private IEnumerable<string> LanguageChoices =>
+        string.IsNullOrEmpty(Node.Language) || LanguageOptions.Contains(Node.Language) ? LanguageOptions : [.. LanguageOptions, Node.Language];
 
     [Parameter, EditorRequired] public RichTextNode Node { get; set; } = default!;
 
@@ -19,6 +23,25 @@ public partial class RichTextNodeEditor
     [Parameter] public int Depth { get; set; } = 1;
 
     [Parameter] public int MaxDepth { get; set; } = RichContentLimits.Default.Depth;
+
+    // Rendering is skipped when the node (an immutable record, so reference equality suffices) and the display
+    // parameters are unchanged, so editing one node does not re-render its siblings. Callbacks always read the live parameters.
+    private RichTextNode? _seenNode;
+    private bool _seenDisabled;
+    private int _seenDepth;
+    private int _seenMaxDepth;
+    private bool _shouldRender = true;
+
+    protected override void OnParametersSet()
+    {
+        _shouldRender = !ReferenceEquals(Node, _seenNode) || Disabled != _seenDisabled || Depth != _seenDepth || MaxDepth != _seenMaxDepth;
+        _seenNode = Node;
+        _seenDisabled = Disabled;
+        _seenDepth = Depth;
+        _seenMaxDepth = MaxDepth;
+    }
+
+    protected override bool ShouldRender() => _shouldRender;
 
     private ImmutableArray<RichTextNode> Children => Node.Children.IsDefault ? [] : Node.Children;
 

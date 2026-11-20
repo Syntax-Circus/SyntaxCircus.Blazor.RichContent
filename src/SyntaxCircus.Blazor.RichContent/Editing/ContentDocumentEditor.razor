@@ -1,3 +1,5 @@
+@if (Document is not null)
+{
 <div class="doc-editor" role="group" aria-label="@Label">
     @if (!HasMediaPicker)
     {
@@ -31,13 +33,18 @@
                     <GalleryBlockEditor Block="gallery" BlockChanged="Replace" Disabled="Disabled" />
                     break;
                 case CalloutBlock callout:
-                    <CalloutBlockEditor Block="callout" BlockChanged="Replace" Disabled="Disabled" />
+                    <CalloutBlockEditor Block="callout" BlockChanged="Replace" Disabled="Disabled" MaxDepth="MaxDepth" />
                     break;
                 case CtaBlock cta:
                     <CtaBlockEditor Block="cta" BlockChanged="Replace" Disabled="Disabled" />
                     break;
                 case ExtensionBlock extension when Registry.TryGet(extension.Type, out var registration) && registration.Editor is { } editor:
-                    <DynamicComponent Type="editor" Parameters="ExtensionParameters(extension)" />
+                    <ErrorBoundary>
+                        <ChildContent>
+                            <DynamicComponent Type="editor" Parameters="ExtensionParameters(extension)" />
+                        </ChildContent>
+                        <ErrorContent><p class="preserved">This block's editor failed to load; the block is kept unchanged.</p></ErrorContent>
+                    </ErrorBoundary>
                     break;
                 case ExtensionBlock extension when Registry.TryGet(extension.Type, out _):
                     <p class="preserved">This block has no editor (kept as-is).</p>
@@ -60,6 +67,7 @@
         @Menu(index + 1, true, inserted => Update(ContentDocumentOperations.Add(Document, index + 1, inserted)))
     }
 </div>
+}
 
 @code {
     private RenderFragment Menu(int position, bool includeText, Func<ContentBlock, Task> insert) =>

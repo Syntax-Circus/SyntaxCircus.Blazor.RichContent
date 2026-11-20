@@ -22,6 +22,9 @@ public sealed class RichTextView : ComponentBase
     /// <summary>Precomputed heading ids (reference-keyed) so ids stay unique across a whole document. Computed locally when absent.</summary>
     [Parameter] public IReadOnlyDictionary<RichTextNode, string>? HeadingIds { get; set; }
 
+    /// <summary>Maximum link length accepted; longer links lose their anchor. Matches <see cref="RichContentLimits.UrlCharacters"/>.</summary>
+    [Parameter] public int UrlCharacters { get; set; } = RichContentLimits.Default.UrlCharacters;
+
     protected override void OnParametersSet() =>
         _headingIds = HeadingIds ?? HeadingIdAllocator.Allocate([Nodes]);
 
@@ -146,7 +149,7 @@ public sealed class RichTextView : ComponentBase
 
     private void BuildLink(RenderTreeBuilder builder, RichTextNode node, int depth, Context context)
     {
-        if (!RichContentUrl.IsSafe(node.Url))
+        if (!RichContentUrl.IsSafe(node.Url, UrlCharacters))
         {
             BuildChildren(builder, node, depth, context);
             return;

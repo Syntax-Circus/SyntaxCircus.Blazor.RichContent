@@ -39,6 +39,7 @@ image, and table.
 ## Registration
 
 ```csharp
+using System.Text.Json;
 using SyntaxCircus.Blazor.RichContent;
 
 builder.Services.AddRazorComponents().AddInteractiveServerComponents();
@@ -55,9 +56,11 @@ builder.Services.AddRichContent(
 `AddRichContent` registers the block registry, the editor options and a default `ICodeHighlighter`
 (`TryAdd`, so you can register your own first). Both arguments are optional.
 
-Call `AddRichContent` **after** `AddRazorComponents()`. It also registers a fallback `IErrorBoundaryLogger` (via
-`TryAdd`) so hosts that use a bare `HtmlRenderer` without Razor components, such as RSS or email rendering, still work
-when an extension block fails. When `AddRazorComponents()` ran first, its logger is the one used.
+Calling `AddRichContent` after `AddRazorComponents()` is recommended but not required. `AddRichContent` registers a
+fallback `IErrorBoundaryLogger` (via `TryAdd`) so hosts that use a bare `HtmlRenderer` without Razor components, such as
+RSS or email rendering, still work when an extension block fails. The only consequence of the order is which
+`IErrorBoundaryLogger` is used: whichever was registered first wins, so with `AddRazorComponents()` first, its logger is
+the one used.
 
 Then render and edit:
 
@@ -69,7 +72,7 @@ Then render and edit:
 
 (`using SyntaxCircus.Blazor.RichContent.Editing` and `.Rendering` for the two components.)
 
-- `ContentDocumentView` server-renders a stored document. A document that fails validation renders nothing.
+- `ContentDocumentView` server-renders a stored document. Blocks that fail validation are skipped (and logged as a warning with block ids and error codes only); the other blocks still render, and document-level errors do not suppress any block.
 - `ContentDocumentEditor` is a controlled component: every edit raises `DocumentChanged` and you feed the new
   document back in (`@bind-Document` does this). `ErrorsChanged` reports the current validation errors so you can
   block saving. Both accept an optional `Limits` parameter; the editor also takes `Label` and `Disabled`.
@@ -116,6 +119,10 @@ object. Register one with `ContentBlockRegistry.Add(type, label, renderer, edito
   (`EventCallback<JsonElement>`) and `Disabled`.
 - **Default data** (optional) - `createDefault` supplies the `Data` of a newly added block; it defaults to `{}`.
   The `label` is what the editor's "add block" menu shows.
+
+`Add` throws `ArgumentException` for a `type` outside `[a-z0-9-]{1,40}`, a renderer that is not a component, or an
+editor that does not derive `ExtensionBlockEditorBase`. Editors and the host media picker are wrapped in an
+`ErrorBoundary`, so a failing one shows "This block's editor failed to load" and leaves the block unchanged.
 
 ```razor
 @* ProjectCardView.razor *@
@@ -171,10 +178,15 @@ A document is plain JSON, safe to keep in a text or `jsonb` column:
 - All enums (node `kind`, callout `tone`) are camelCase strings.
 - Always go through `ContentDocumentSerializer`; do not hand-roll the serializer options.
 
-**Compatibility promise:** changes within schema version 1 are additive only (new optional fields, new block types).
-Existing documents keep reading and rendering. A block with a `$block` this version does not know is **preserved and
-skipped**: it round-trips verbatim through `Deserialize`/`Serialize` and renders nothing, but is never dropped. Any
-breaking change would bump `schemaVersion`.
+**Compatibility:** within schema version 1, changes are additive only (new optional properties, new block types, new
+node kinds and enum values). Readers behave as follows:
+
+- Unknown properties on known blocks, nodes and gallery images are preserved verbatim on re-serialize.
+- A block with a `$block` this version does not know is preserved verbatim and renders nothing.
+- A known block this reader cannot bind (for example a node kind or callout tone added by a newer writer) is preserved
+  verbatim as an unsupported block. The editor shows it as unsupported, `Validate` reports `malformed-known-block`, and
+  the viewer skips it; the rest of the document still reads and renders.
+- Upgrade readers before writers. Any breaking change bumps `schemaVersion`; a reader rejects a version it does not support.
 
 ## Links and security
 

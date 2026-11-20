@@ -12,7 +12,7 @@ using SyntaxCircus.RichContent;
 
 namespace SyntaxCircus.Blazor.RichContent.Tests;
 
-public sealed class EditorRenderingTests
+public sealed partial class EditorRenderingTests
 {
     private sealed class Resolver : IRichContentMediaResolver
     {

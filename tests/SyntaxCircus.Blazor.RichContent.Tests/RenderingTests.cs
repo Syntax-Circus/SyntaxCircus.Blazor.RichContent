@@ -10,7 +10,7 @@ using SyntaxCircus.RichContent;
 
 namespace SyntaxCircus.Blazor.RichContent.Tests;
 
-public sealed class RenderingTests
+public sealed partial class RenderingTests
 {
     private sealed class Resolver(bool resolves = true) : IRichContentMediaResolver
     {
@@ -143,13 +143,15 @@ public sealed class RenderingTests
     }
 
     [Fact]
-    public async Task InvalidDocument_RendersNothing()
+    public async Task InvalidBlock_IsSkipped_OtherBlocksStillRender()
     {
         var bad = new RichTextNode(RichTextNodeKind.Link, Url: "javascript:alert(1)", Children: [Text("Bad")]);
 
-        var html = await RenderDocument(Doc(Rich("a", Para(bad))));
+        var html = await RenderDocument(Doc(Rich("a", Para(bad)), Rich("b", Para(Text("Good")))));
 
-        html.Trim().ShouldBeEmpty();
+        html.ShouldContain("Good");
+        html.ShouldNotContain("Bad");
+        html.ShouldNotContain("javascript:");
     }
 
     [Fact]

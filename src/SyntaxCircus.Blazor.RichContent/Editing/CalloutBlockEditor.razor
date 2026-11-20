@@ -8,7 +8,7 @@
         </select>
     </label>
     <label>Title<input type="text" value="@Block.Title" @oninput="TitleChanged" disabled="@Disabled" /></label>
-    <RichTextEditor Nodes="Block.Nodes" NodesChanged="NodesChanged" Disabled="Disabled" Label="Callout text" />
+    <RichTextEditor Nodes="Block.Nodes" NodesChanged="NodesChanged" Disabled="Disabled" Label="Callout text" MaxDepth="MaxDepth" />
 </div>
 
 @code {
@@ -17,6 +17,8 @@
     [Parameter] public EventCallback<CalloutBlock> BlockChanged { get; set; }
 
     [Parameter] public bool Disabled { get; set; }
+
+    [Parameter] public int MaxDepth { get; set; } = RichContentLimits.Default.Depth;
 
     private Task ToneChanged(ChangeEventArgs e) =>
         Enum.TryParse<CalloutTone>(e.Value?.ToString(), out var tone) ? BlockChanged.InvokeAsync(Block with { Tone = tone }) : Task.CompletedTask;

@@ -11,10 +11,10 @@
         case RichTextNodeKind.CodeBlock:
             <label>Language
                 <select value="@(Node.Language ?? "")" @onchange="LanguageChanged" disabled="@Disabled">
-                    <option value="">Plain text</option>
-                    @foreach (var language in LanguageOptions)
+                    <option value="" selected="@string.IsNullOrEmpty(Node.Language)">Plain text</option>
+                    @foreach (var language in LanguageChoices)
                     {
-                        <option value="@language">@language</option>
+                        <option value="@language" selected="@(language == Node.Language)">@language</option>
                     }
                 </select>
             </label>

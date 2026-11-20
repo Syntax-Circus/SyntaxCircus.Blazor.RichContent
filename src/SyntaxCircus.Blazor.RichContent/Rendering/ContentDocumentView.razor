@@ -1,24 +1,26 @@
 @if (_render)
 {
     <div class="rich-content">
-        @foreach (var block in _blocks)
+        @for (var i = 0; i < _blocks.Length; i++)
         {
+            var block = _blocks[i];
+            var key = _keys[i];
             switch (block)
             {
                 case RichTextBlock rich:
-                    <RichTextView Nodes="rich.Nodes" HeadingIds="_headingIds" />
+                    <RichTextView @key="key" Nodes="rich.Nodes" HeadingIds="_headingIds" UrlCharacters="_urlCharacters" />
                     break;
                 case CalloutBlock callout:
-                    <CalloutBlockView Block="callout" HeadingIds="_headingIds" />
+                    <CalloutBlockView @key="key" Block="callout" HeadingIds="_headingIds" UrlCharacters="_urlCharacters" />
                     break;
                 case GalleryBlock gallery:
-                    <GalleryBlockView Block="gallery" />
+                    <GalleryBlockView @key="key" Block="gallery" />
                     break;
                 case CtaBlock cta:
-                    <CtaBlockView Block="cta" />
+                    <CtaBlockView @key="key" Block="cta" UrlCharacters="_urlCharacters" />
                     break;
                 case ExtensionBlock extension when Registry.TryGet(extension.Type, out var registration):
-                    <ErrorBoundary>
+                    <ErrorBoundary @key="key">
                         <ChildContent>
                             <DynamicComponent Type="registration.Renderer" Parameters="ExtensionParameters(extension)" />
                         </ChildContent>
