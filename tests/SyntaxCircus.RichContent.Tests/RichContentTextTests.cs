@@ -26,7 +26,7 @@ public class RichContentTextTests
             ]),
             new CalloutBlock("c", CalloutTone.Tip, "Tip title", [Para("Callout text")]),
             new GalleryBlock("g", [new GalleryImage(new MediaRef("m"), "gallery alt", "Gallery caption")], null),
-            new CtaBlock("cta", "Join us", "Body here", "Go", "/x"),
+            new CtaBlock("cta", "Join us", "Body here", "GoLabelXyz", "/x"),
             new ExtensionBlock("e", "project-card", data.RootElement.Clone()),
             new UnknownBlock("u", raw.RootElement.Clone()));
 
@@ -43,7 +43,7 @@ public class RichContentTextTests
         text.ShouldNotContain("hidden");
         text.ShouldNotContain("gallery alt");
         text.ShouldContain("\n\n");
-        text.ShouldNotContain("Go");
+        text.ShouldNotContain("GoLabelXyz");
     }
 
     [Fact]

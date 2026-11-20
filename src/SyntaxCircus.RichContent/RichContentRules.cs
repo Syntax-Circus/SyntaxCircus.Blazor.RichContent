@@ -33,7 +33,12 @@ public static partial class RichContentRules
         foreach (var block in blocks)
         {
             var id = block.Id;
-            if (string.IsNullOrEmpty(id) || !IdPattern().IsMatch(id))
+            var malformedKnown = block is UnknownBlock candidate && KnownDiscriminator(candidate) is not null;
+            if (malformedKnown)
+            {
+                // Reported once below as malformed-known-block; a missing id is part of that failure.
+            }
+            else if (string.IsNullOrEmpty(id) || !IdPattern().IsMatch(id))
             {
                 errors.Add(new(id, "invalid-block-id", "Block ids must match [a-z0-9-]{1,40}."));
             }
@@ -80,13 +85,10 @@ public static partial class RichContentRules
                     break;
                 case UnknownBlock unknown:
                     // Genuinely unknown discriminators are preserved verbatim; a known one that failed to bind is malformed.
-                    if (unknown.Raw.ValueKind == JsonValueKind.Object
-                        && unknown.Raw.TryGetProperty("$block", out var discriminator)
-                        && discriminator.ValueKind == JsonValueKind.String
-                        && ContentDocumentSerializer.IsKnownDiscriminator(discriminator.GetString()))
+                    if (KnownDiscriminator(unknown) is { } discriminator)
                     {
                         errors.Add(new(string.IsNullOrEmpty(id) ? null : id, "malformed-known-block",
-                            $"A '{discriminator.GetString()}' block is missing required members."));
+                            $"A '{discriminator}' block is missing required members."));
                     }
                     break;
             }
@@ -94,6 +96,15 @@ public static partial class RichContentRules
 
         return errors;
     }
+
+    private static string? KnownDiscriminator(UnknownBlock unknown) =>
+        unknown.Raw.ValueKind == JsonValueKind.Object
+        && unknown.Raw.TryGetProperty("$block", out var discriminator)
+        && discriminator.ValueKind == JsonValueKind.String
+        && discriminator.GetString() is { } name
+        && ContentDocumentSerializer.IsKnownDiscriminator(name)
+            ? name
+            : null;
 
     public static IReadOnlyList<RichContentError> ValidateNodes(ImmutableArray<RichTextNode> nodes, string? blockId, RichContentLimits? limits = null)
     {
