@@ -91,7 +91,7 @@ public static class ContentDocumentSerializer
                 var type = element.TryGetProperty("$block", out var t) && t.ValueKind == JsonValueKind.String ? t.GetString() : null;
                 if (type is not null && KnownBlocks.Contains(type))
                 {
-                    var block = element.Deserialize<ContentBlock>(Options);
+                    var block = TryBind(element);
                     if (block is not null && HasRequiredMembers(block))
                     {
                         blocks.Add(block);
@@ -108,6 +108,20 @@ public static class ContentDocumentSerializer
         catch (JsonException ex)
         {
             return Fail($"Invalid content JSON: {ex.Message}");
+        }
+    }
+
+    // A block this reader cannot bind (newer node kinds, enum values, wrong shapes) must not make the
+    // whole document unreadable; the caller falls back to an UnknownBlock that preserves the raw JSON.
+    private static ContentBlock? TryBind(JsonElement element)
+    {
+        try
+        {
+            return element.Deserialize<ContentBlock>(Options);
+        }
+        catch (Exception ex) when (ex is JsonException or NotSupportedException or InvalidOperationException)
+        {
+            return null;
         }
     }
 

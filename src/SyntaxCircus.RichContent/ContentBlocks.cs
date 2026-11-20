@@ -18,18 +18,48 @@ public enum CalloutTone { Info, Tip, Warning }
 [JsonDerivedType(typeof(ExtensionBlock), "extension")]
 public abstract record ContentBlock(string Id);
 
-public sealed record RichTextBlock(string Id, ImmutableArray<RichTextNode> Nodes) : ContentBlock(Id);
+public sealed record RichTextBlock(string Id, ImmutableArray<RichTextNode> Nodes) : ContentBlock(Id)
+{
+    /// <summary>Unknown properties from newer writers, preserved verbatim on re-serialize.</summary>
+    [JsonExtensionData]
+    public IDictionary<string, JsonElement>? Extra { get; init; }
+}
 
-public sealed record GalleryImage(MediaRef Media, string Alt, string? Caption);
+public sealed record GalleryImage(MediaRef Media, string Alt, string? Caption)
+{
+    /// <summary>Unknown properties from newer writers, preserved verbatim on re-serialize.</summary>
+    [JsonExtensionData]
+    public IDictionary<string, JsonElement>? Extra { get; init; }
+}
 
-public sealed record GalleryBlock(string Id, ImmutableArray<GalleryImage> Images, string? Title) : ContentBlock(Id);
+public sealed record GalleryBlock(string Id, ImmutableArray<GalleryImage> Images, string? Title) : ContentBlock(Id)
+{
+    /// <summary>Unknown properties from newer writers, preserved verbatim on re-serialize.</summary>
+    [JsonExtensionData]
+    public IDictionary<string, JsonElement>? Extra { get; init; }
+}
 
-public sealed record CalloutBlock(string Id, CalloutTone Tone, string? Title, ImmutableArray<RichTextNode> Nodes) : ContentBlock(Id);
+public sealed record CalloutBlock(string Id, CalloutTone Tone, string? Title, ImmutableArray<RichTextNode> Nodes) : ContentBlock(Id)
+{
+    /// <summary>Unknown properties from newer writers, preserved verbatim on re-serialize.</summary>
+    [JsonExtensionData]
+    public IDictionary<string, JsonElement>? Extra { get; init; }
+}
 
-public sealed record CtaBlock(string Id, string Heading, string? Body, string Label, string Url) : ContentBlock(Id);
+public sealed record CtaBlock(string Id, string Heading, string? Body, string Label, string Url) : ContentBlock(Id)
+{
+    /// <summary>Unknown properties from newer writers, preserved verbatim on re-serialize.</summary>
+    [JsonExtensionData]
+    public IDictionary<string, JsonElement>? Extra { get; init; }
+}
 
 /// <summary>An app-defined block (e.g. a project card); <see cref="Type"/> names it, <see cref="Data"/> is its payload.</summary>
-public sealed record ExtensionBlock(string Id, string Type, JsonElement Data) : ContentBlock(Id);
+public sealed record ExtensionBlock(string Id, string Type, JsonElement Data) : ContentBlock(Id)
+{
+    /// <summary>Unknown properties from newer writers, preserved verbatim on re-serialize.</summary>
+    [JsonExtensionData]
+    public IDictionary<string, JsonElement>? Extra { get; init; }
+}
 
 /// <summary>A block whose "$block" type this version does not know; preserved verbatim so it round-trips.</summary>
 public sealed record UnknownBlock(string Id, JsonElement Raw) : ContentBlock(Id);

@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace SyntaxCircus.RichContent;
@@ -24,4 +25,9 @@ public sealed record RichTextNode(
     MediaRef? Media = null,
     string? Alt = null,
     string? Caption = null,
-    bool? Header = null);
+    bool? Header = null)
+{
+    /// <summary>Unknown properties from newer writers, preserved verbatim on re-serialize.</summary>
+    [JsonExtensionData]
+    public IDictionary<string, JsonElement>? Extra { get; init; }
+}

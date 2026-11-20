@@ -107,7 +107,6 @@ public class ContentDocumentSerializerTests
     [InlineData("{not json")]
     [InlineData("")]
     [InlineData("[]")]
-    [InlineData("""{"schemaVersion":1,"blocks":[{"$block":"cta","id":"b","heading":5}]}""")]
     public void Deserialize_MalformedJson_ReturnsError_DoesNotThrow(string json)
     {
         var result = ContentDocumentSerializer.Deserialize(json);
@@ -156,5 +155,40 @@ public class ContentDocumentSerializerTests
 
         result.Error.ShouldBeNull();
         result.Document!.Blocks.Length.ShouldBe(3);
+    }
+
+    [Theory]
+    [InlineData("""{"$block":"cta","id":"b","heading":5}""")]
+    [InlineData("""{"$block":"embed-ish"}""")]
+    [InlineData("""{"$block":"callout","id":"b","tone":"danger","nodes":[]}""")]
+    [InlineData("""{"$block":"rich-text","id":"b","nodes":[{"kind":"embed"}]}""")]
+    public void Deserialize_UnbindableKnownBlock_BecomesUnknownBlock_AndDocumentSurvives(string blockJson)
+    {
+        var json = $$"""{"schemaVersion":1,"blocks":[{"$block":"cta","id":"ok","heading":"h","label":"l","url":"/x"},{{blockJson}}]}""";
+
+        var result = ContentDocumentSerializer.Deserialize(json);
+
+        result.Error.ShouldBeNull();
+        result.Document!.Blocks.Length.ShouldBe(2);
+        result.Document.Blocks[0].ShouldBeOfType<CtaBlock>();
+        var unknown = result.Document.Blocks[1].ShouldBeOfType<UnknownBlock>();
+        unknown.Raw.GetProperty("$block").GetString().ShouldNotBeNull();
+        ContentDocumentSerializer.Serialize(result.Document).ShouldContain(unknown.Raw.GetRawText());
+    }
+
+    [Fact]
+    public void RoundTrip_PreservesUnknownPropertiesOnBlocksNodesAndGalleryImages()
+    {
+        const string json = """{"schemaVersion":1,"blocks":[{"$block":"rich-text","id":"a","futureField":{"x":1},"nodes":[{"kind":"paragraph","nodeFuture":true,"children":[{"kind":"text","text":"hi"}]}]},{"$block":"gallery","id":"g","images":[{"media":{"id":"m"},"alt":"a","imgFuture":"z"}]},{"$block":"cta","id":"c","heading":"h","label":"l","url":"/x","ctaFuture":1}]}""";
+
+        var result = ContentDocumentSerializer.Deserialize(json);
+        result.Error.ShouldBeNull();
+        var reserialized = ContentDocumentSerializer.Serialize(result.Document!);
+
+        reserialized.ShouldContain("\"futureField\":{\"x\":1}");
+        reserialized.ShouldContain("\"nodeFuture\":true");
+        reserialized.ShouldContain("\"imgFuture\":\"z\"");
+        reserialized.ShouldContain("\"ctaFuture\":1");
+        ContentDocumentSerializer.Deserialize(reserialized).Document!.Blocks.Length.ShouldBe(3);
     }
 }
