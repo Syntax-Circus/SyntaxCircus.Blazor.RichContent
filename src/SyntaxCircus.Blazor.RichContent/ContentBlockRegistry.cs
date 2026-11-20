@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
 
 namespace SyntaxCircus.Blazor.RichContent;
@@ -16,11 +17,16 @@ public sealed class ContentBlockRegistry
         ArgumentException.ThrowIfNullOrWhiteSpace(type);
         ArgumentException.ThrowIfNullOrWhiteSpace(label);
         ArgumentNullException.ThrowIfNull(renderer);
+        if (_registrations.ContainsKey(type))
+        {
+            throw new InvalidOperationException($"A block type '{type}' is already registered.");
+        }
+
         _registrations[type] = new ContentBlockRegistration(type, label, renderer, editor, createDefault ?? EmptyObject);
         return this;
     }
 
-    public bool TryGet(string type, out ContentBlockRegistration registration)
+    public bool TryGet(string type, [MaybeNullWhen(false)] out ContentBlockRegistration registration)
     {
         if (type is not null && _registrations.TryGetValue(type, out var found))
         {
@@ -28,7 +34,7 @@ public sealed class ContentBlockRegistry
             return true;
         }
 
-        registration = null!;
+        registration = null;
         return false;
     }
 

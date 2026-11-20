@@ -18,7 +18,12 @@
                     <CtaBlockView Block="cta" />
                     break;
                 case ExtensionBlock extension when Registry.TryGet(extension.Type, out var registration):
-                    <DynamicComponent Type="registration.Renderer" Parameters="ExtensionParameters(extension)" />
+                    <ErrorBoundary>
+                        <ChildContent>
+                            <DynamicComponent Type="registration.Renderer" Parameters="ExtensionParameters(extension)" />
+                        </ChildContent>
+                        <ErrorContent></ErrorContent>
+                    </ErrorBoundary>
                     break;
                 // UnknownBlock and unregistered extensions render nothing.
             }

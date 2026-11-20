@@ -31,11 +31,25 @@ public sealed class RenderingTests
         }
     }
 
+    public sealed class ExplodingCard : ComponentBase
+    {
+        [Parameter] public JsonElement Data { get; set; }
+
+        protected override void BuildRenderTree(RenderTreeBuilder builder) => throw new InvalidOperationException("boom");
+    }
+
+    // A real app gets IErrorBoundaryLogger from AddRazorComponents; the bare test host must supply it.
+    private sealed class TestErrorBoundaryLogger : IErrorBoundaryLogger
+    {
+        public ValueTask LogErrorAsync(Exception exception) => ValueTask.CompletedTask;
+    }
+
     private static ServiceProvider Services(bool resolves = true) =>
         new ServiceCollection()
             .AddLogging()
+            .AddSingleton<IErrorBoundaryLogger, TestErrorBoundaryLogger>()
             .AddSingleton<IRichContentMediaResolver>(new Resolver(resolves))
-            .AddRichContent(blocks => blocks.Add("project-card", "Project card", typeof(ProjectCard)))
+            .AddRichContent(blocks => blocks.Add("project-card", "Project card", typeof(ProjectCard)).Add("exploding", "Exploding", typeof(ExplodingCard)))
             .BuildServiceProvider();
 
     private static async Task<string> Render<TComponent>(Dictionary<string, object?> parameters, bool resolves = true)
@@ -292,5 +306,71 @@ public sealed class RenderingTests
         found.Label.ShouldBe("A");
         found.CreateDefault().ValueKind.ShouldBe(JsonValueKind.Object);
         registry.TryGet("b", out _).ShouldBeFalse();
+    }
+
+    [Fact]
+    public void Registry_DuplicateType_Throws()
+    {
+        var registry = new ContentBlockRegistry().Add("a", "A", typeof(ProjectCard));
+
+        Should.Throw<InvalidOperationException>(() => registry.Add("a", "A2", typeof(ProjectCard)));
+    }
+
+    [Fact]
+    public async Task ThrowingExtensionRenderer_RendersNothing_AndRestOfDocumentRenders()
+    {
+        using var data = JsonDocument.Parse("""{"name":"Zed"}""");
+        var doc = Doc(
+            Rich("a", Para(Text("before"))),
+            new ExtensionBlock("e1", "exploding", data.RootElement.Clone()),
+            new ExtensionBlock("e2", "project-card", data.RootElement.Clone()),
+            Rich("b", Para(Text("after"))));
+
+        var html = await RenderDocument(doc);
+
+        html.ShouldContain("before");
+        html.ShouldContain("Zed");
+        html.ShouldContain("after");
+        html.ShouldNotContain("boom");
+    }
+
+    [Fact]
+    public async Task CodeBlock_HighlightedMarkupOutsideStrings_IsEscaped()
+    {
+        var code = new RichTextNode(RichTextNodeKind.CodeBlock, Text: "a<b", Language: "cs");
+
+        var html = await RenderDocument(Doc(Rich("a", code)));
+
+        html.ShouldContain("&lt;");
+        html.ShouldNotContain("a<b");
+    }
+
+    [Fact]
+    public async Task CtaBlockView_UnsafeUrl_RendersNoAnchor()
+    {
+        var html = await Render<CtaBlockView>(new() { ["Block"] = new CtaBlock("c", "Head", null, "Go", "javascript:alert(1)") });
+
+        html.ShouldContain("Head");
+        html.ShouldNotContain("<a");
+    }
+
+    [Fact]
+    public async Task RichTextView_ToleratesNullNode_NullLinkUrl_AndDeepNesting()
+    {
+        RichTextNode deep = Text("deep");
+        for (var i = 0; i < 40; i++)
+        {
+            deep = new RichTextNode(RichTextNodeKind.Quote, Children: [deep]);
+        }
+
+        var nodes = ImmutableArray.Create(
+            null!,
+            Para(new RichTextNode(RichTextNodeKind.Link, Url: null, Children: [Text("nolink")])),
+            deep);
+
+        var html = await Render<RichTextView>(new() { ["Nodes"] = nodes });
+
+        html.ShouldContain("nolink");
+        html.ShouldNotContain("<a");
     }
 }
