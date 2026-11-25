@@ -51,6 +51,13 @@ internal static class SurfaceSupport
         return AllSupported(pending);
     }
 
+    /// <summary>
+    /// True for a kind a surface cannot edit without children. It cannot reliably show or enter an empty one, so
+    /// rebuilding around it would drop it, along with a link's address or a list's ordering.
+    /// </summary>
+    public static bool NeedsChildren(RichTextNodeKind kind) =>
+        kind is RichTextNodeKind.Link or RichTextNodeKind.List or RichTextNodeKind.Quote;
+
     private readonly record struct Pending(RichTextNode Node, int Depth, bool WithinLink);
 
     // Iterative, and gives up at the depth limit, so a hostile tree cannot exhaust the stack here or in a later renderer.
@@ -66,9 +73,8 @@ internal static class SurfaceSupport
 
             if (node.Children.IsDefaultOrEmpty)
             {
-                // A surface cannot reliably show or enter these, so rebuilding around one would drop it,
-                // along with a link's address or a list's ordering. Other empty nodes can be typed into or lose nothing.
-                if (node.Kind is RichTextNodeKind.Link or RichTextNodeKind.List or RichTextNodeKind.Quote)
+                // Other empty nodes can be typed into or lose nothing.
+                if (NeedsChildren(node.Kind))
                 {
                     return false;
                 }
