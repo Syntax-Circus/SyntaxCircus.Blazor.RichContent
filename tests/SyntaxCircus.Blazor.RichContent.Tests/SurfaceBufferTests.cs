@@ -434,6 +434,86 @@ public sealed class SurfaceBufferTests
         ];
     }
 
+    [Theory]
+    [InlineData("""{"kind":"list","text":"kept?"}""")]
+    [InlineData("""{"kind":"list","url":"https://example.com"}""")]
+    [InlineData("""{"kind":"list","level":2,"children":[]}""")]
+    [InlineData("""{"kind":"quote","text":""}""")]
+    [InlineData("""{"kind":"quote","ordered":true}""")]
+    [InlineData("""{"kind":"paragraph","children":[{"kind":"link","url":"https://example.com","text":"kept?"}]}""")]
+    [InlineData("""{"kind":"paragraph","children":[{"kind":"link","children":[]}]}""")]
+    [InlineData("""{"kind":"quote","children":[{"kind":"list","text":"kept?"}]}""")]
+    public void Apply_MalformedChildlessContainer_IsRejected_NotDropped(string node)
+    {
+        var (buffer, keys, originals) = Loaded(Paragraph("a"));
+        var wire = JsonSerializer.Deserialize<SurfaceNode>(node, JsonSerializerOptions.Web)!;
+
+        Should.Throw<FormatException>(() => buffer.Apply(Patch(buffer, [keys[0], "c1"], new KeyedNode("c1", wire))));
+
+        buffer.Matches([.. originals]).ShouldBeTrue();
+    }
+
+    [Fact]
+    public void ExceptionMessages_DoNotEchoWhatTheBrowserSent()
+    {
+        var huge = new string('k', 100_000);
+        var (buffer, keys, _) = Loaded(Paragraph("a"));
+        var changed = new KeyedNode(huge, WireParagraph("x"));
+
+        SurfacePatch[] patches =
+        [
+            Patch(buffer, [huge]),
+            Patch(buffer, [huge, huge], changed),
+            Patch(buffer, [huge], changed, changed),
+            Patch(buffer, keys, changed),
+            Patch(buffer, ["c1"], new KeyedNode("c1", new SurfaceNode(huge))),
+        ];
+
+        foreach (var patch in patches)
+        {
+            Should.Throw<FormatException>(() => buffer.Apply(patch)).Message.ShouldNotContain("kkkk");
+        }
+    }
+
+    [Fact]
+    public void TryRebase_EqualValues_TakesTheNewObjects()
+    {
+        var (buffer, keys, _) = Loaded(Paragraph("a"), Paragraph("b"));
+        RichTextNode[] copies = [Paragraph("a"), Paragraph("b")];
+
+        buffer.TryRebase([.. copies]).ShouldBeTrue();
+
+        var result = buffer.Apply(Patch(buffer, keys));
+        result[0].ShouldBeSameAs(copies[0]);
+        result[1].ShouldBeSameAs(copies[1]);
+    }
+
+    [Fact]
+    public void TryRebase_DifferentValues_ChangesNothing()
+    {
+        var (buffer, keys, originals) = Loaded(Paragraph("a"));
+
+        buffer.TryRebase([Paragraph("z")]).ShouldBeFalse();
+
+        buffer.Apply(Patch(buffer, keys)).Single().ShouldBeSameAs(originals[0]);
+    }
+
+    [Fact]
+    public void TryRebase_SkipsDroppedKeys_WhichStayKnown()
+    {
+        var (buffer, keys, _) = Loaded(Node(Kind.Quote, Paragraph("a")), Paragraph("b"));
+        string[] order = ["c1", keys[0], keys[1]];
+        buffer.Apply(Patch(buffer, order, new KeyedNode("c1", WireParagraph("new")), new KeyedNode(keys[0], Wire("quote"))));
+        RichTextNode[] copies = [Paragraph("new"), Paragraph("b")];
+
+        buffer.TryRebase([.. copies]).ShouldBeTrue();
+
+        var result = buffer.Apply(Patch(buffer, order));
+        result.Length.ShouldBe(2);
+        result[0].ShouldBeSameAs(copies[0]);
+        result[1].ShouldBeSameAs(copies[1]);
+    }
+
     [Fact]
     public void Mapping_RoundTripsEverySupportedKind()
     {

@@ -104,9 +104,11 @@ internal static class SurfaceSupport
         return true;
     }
 
-    // Text, link address and heading level are required by their kinds; every other field is optional on its own
-    // kind. No kind may carry another kind's field.
-    private static bool HasSupportedFields(RichTextNode node)
+    /// <summary>
+    /// True when the node has the fields its kind requires and none of another kind's. Text, link address and
+    /// heading level are required by their kinds; every other field is optional on its own kind.
+    /// </summary>
+    public static bool HasSupportedFields(RichTextNode node)
     {
         var kind = node.Kind;
         var hasText = kind is RichTextNodeKind.Text or RichTextNodeKind.InlineCode or RichTextNodeKind.CodeBlock;

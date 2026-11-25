@@ -14,6 +14,7 @@ internal sealed class SurfaceBuffer(bool inline = false)
     // A key with a null node is one the author emptied: nothing is stored for it, but the browser still has it.
     private Dictionary<string, RichTextNode?> _known = new(StringComparer.Ordinal);
     private ImmutableArray<RichTextNode> _nodes = [];
+    private ImmutableArray<string> _nodeKeys = [];
 
     // Never restarts, so a key cannot come to mean another node. The browser must name its own keys differently.
     private long _lastKey;
@@ -36,6 +37,7 @@ internal sealed class SurfaceBuffer(bool inline = false)
         _lastKey = lastKey;
         _known = known;
         _nodes = nodes;
+        _nodeKeys = [.. keyed.Select(entry => entry.Key)];
         Generation++;
         return keyed;
     }
@@ -75,17 +77,19 @@ internal sealed class SurfaceBuffer(bool inline = false)
 
             if (!changed.TryAdd(entry.Key, entry.Node))
             {
-                throw new FormatException($"Key '{entry.Key}' is changed twice.");
+                // The messages never repeat what the browser sent: it can be very long.
+                throw new FormatException("A key is changed twice.");
             }
         }
 
         var next = new Dictionary<string, RichTextNode?>(StringComparer.Ordinal);
         var nodes = ImmutableArray.CreateBuilder<RichTextNode>();
+        var nodeKeys = ImmutableArray.CreateBuilder<string>();
         foreach (var key in patch.Order)
         {
             if (string.IsNullOrEmpty(key) || next.ContainsKey(key))
             {
-                throw new FormatException($"Key '{key}' is empty or used twice.");
+                throw new FormatException("A key is empty or used twice.");
             }
 
             var isKnown = _known.TryGetValue(key, out var node);
@@ -95,13 +99,14 @@ internal sealed class SurfaceBuffer(bool inline = false)
             }
             else if (!isKnown)
             {
-                throw new FormatException($"Key '{key}' is not known and the patch has no node for it.");
+                throw new FormatException("A key is not known and the patch has no node for it.");
             }
 
             next.Add(key, node);
             if (node is not null)
             {
                 nodes.Add(node);
+                nodeKeys.Add(key);
             }
         }
 
@@ -112,12 +117,34 @@ internal sealed class SurfaceBuffer(bool inline = false)
 
         _known = next;
         _nodes = nodes.ToImmutable();
+        _nodeKeys = nodeKeys.ToImmutable();
         return _nodes;
     }
 
     /// <summary>True when the surface holds these values, whether or not they are the same objects.</summary>
     public bool Matches(ImmutableArray<RichTextNode> nodes) =>
         string.Equals(Json(_nodes), Json(nodes.IsDefault ? [] : nodes), StringComparison.Ordinal);
+
+    /// <summary>
+    /// When the surface holds these values (see <see cref="Matches"/>), takes the new objects as its originals,
+    /// keeping every key and the generation, and returns true. Otherwise changes nothing.
+    /// </summary>
+    public bool TryRebase(ImmutableArray<RichTextNode> nodes)
+    {
+        if (!Matches(nodes))
+        {
+            return false;
+        }
+
+        nodes = nodes.IsDefault ? [] : nodes;
+        for (var index = 0; index < _nodeKeys.Length; index++)
+        {
+            _known[_nodeKeys[index]] = nodes[index];
+        }
+
+        _nodes = nodes;
+        return true;
+    }
 
     // Null when the author emptied the node.
     private RichTextNode? Rebuild(SurfaceNode wire, RichTextNode? previous)
@@ -137,6 +164,8 @@ internal sealed class SurfaceBuffer(bool inline = false)
     }
 
     // Inside out, so a container that held only emptied containers goes too. ToNode has bounded the depth.
+    // Only a clean container is dropped. One that carries a field it must not have, or lacks one it needs, would
+    // take that content with it, so the patch is rejected instead.
     private static RichTextNode? WithoutEmptied(RichTextNode node)
     {
         if (!node.Children.IsDefaultOrEmpty)
@@ -144,7 +173,14 @@ internal sealed class SurfaceBuffer(bool inline = false)
             node = node with { Children = [.. node.Children.Select(WithoutEmptied).OfType<RichTextNode>()] };
         }
 
-        return node.Children.IsDefaultOrEmpty && SurfaceSupport.NeedsChildren(node.Kind) ? null : node;
+        if (!node.Children.IsDefaultOrEmpty || !SurfaceSupport.NeedsChildren(node.Kind))
+        {
+            return node;
+        }
+
+        return SurfaceSupport.HasSupportedFields(node)
+            ? null
+            : throw new FormatException($"An empty {node.Kind} node has fields it cannot have.");
     }
 
     private static string Json<T>(T value) => JsonSerializer.Serialize(value, ContentDocumentSerializer.Options);

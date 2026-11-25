@@ -54,7 +54,8 @@ internal sealed record SurfaceNode(string Kind, string? Text = null, string? Url
 
         if (Kind is null || !Kinds.TryGetValue(Kind, out var kind))
         {
-            throw new FormatException($"Unknown node kind '{Kind}'.");
+            // Not repeated: it is the browser's, and can be very long.
+            throw new FormatException("A node kind is missing or unknown.");
         }
 
         ImmutableArray<RichTextNode> children = Children is null
