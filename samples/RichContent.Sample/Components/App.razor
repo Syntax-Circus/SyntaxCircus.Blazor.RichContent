@@ -5,6 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <base href="/" />
     <title>Rich content sample</title>
+    @* An empty icon, so browsers do not request /favicon.ico and log its 404 as a console error. *@
+    <link rel="icon" href="data:," />
     <link rel="stylesheet" href="@Assets["RichContent.Sample.styles.css"]" />
     <HeadOutlet @rendermode="InteractiveServer" />
 </head>
