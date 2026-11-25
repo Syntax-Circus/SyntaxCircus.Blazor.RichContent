@@ -256,15 +256,121 @@ public sealed class SurfacePlannerTests
             Node(Kind.Paragraph, Link("javascript:alert(1)", Text())),
             Node(Kind.Paragraph, Link("", Text())),
             Node(Kind.Paragraph, Text(new string('a', limits.TextBytes + 1))),
-            // Empty containers, as left behind when the author deletes everything in them.
-            new(Kind.Paragraph),
-            Node(Kind.Paragraph),
-            Heading() with { Children = [] },
-            Bullets(),
         ];
 
         nodes.ShouldAllBe(node => SurfaceSupport.CanEdit(node));
     }
+
+    // Children can be absent (default) or present but empty; both mean the node is empty.
+    private static RichTextNode Empty(Kind kind, bool isDefault) => new(
+        kind,
+        Url: kind == Kind.Link ? "/kept" : null,
+        HeadingLevel: kind == Kind.Heading ? 2 : null,
+        Ordered: kind == Kind.List ? true : null,
+        Children: isDefault ? default : []);
+
+    // A surface cannot show these, so rebuilding the node around one would silently drop it.
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void EmptyListOrQuote_IsLocked(bool isDefault)
+    {
+        var list = Empty(Kind.List, isDefault);
+        RichTextNode[] nodes =
+        [
+            list,
+            Empty(Kind.Quote, isDefault),
+            Bullets(list),
+            Bullets(Text(), list),
+            Node(Kind.Quote, list),
+            Node(Kind.Quote, Paragraph(), list),
+        ];
+
+        nodes.ShouldAllBe(node => !SurfaceSupport.CanEdit(node));
+        nodes.ShouldAllBe(node => Only(node) == SegmentKind.Locked);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void EmptyLink_IsLockedWhereverItSits(bool isDefault)
+    {
+        var link = Empty(Kind.Link, isDefault);
+        RichTextNode[] nodes =
+        [
+            Node(Kind.Paragraph, link),
+            Node(Kind.Paragraph, Text(), link),
+            Node(Kind.Paragraph, Node(Kind.Strong, link)),
+            Heading() with { Children = [link] },
+            Bullets(link),
+            Node(Kind.Quote, Node(Kind.Paragraph, link)),
+        ];
+
+        nodes.ShouldAllBe(node => !SurfaceSupport.CanEdit(node));
+        SurfaceSupport.CanEditInline([link]).ShouldBeFalse();
+        SurfaceSupport.CanEditInline([Node(Kind.Emphasis, link)]).ShouldBeFalse();
+        Only(Table(Cell(Text()), Cell(link))).ShouldBe(SegmentKind.Locked);
+    }
+
+    // Left behind when the author deletes everything in them, or harmless to drop.
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void EmptyParagraphHeadingAndListItem_StayEditable(bool isDefault)
+    {
+        var paragraph = Empty(Kind.Paragraph, isDefault);
+        var item = Empty(Kind.ListItem, isDefault);
+        RichTextNode[] nodes =
+        [
+            paragraph,
+            Empty(Kind.Heading, isDefault),
+            Node(Kind.List, item),
+            Node(Kind.Quote, paragraph),
+            Bullets(paragraph),
+            Node(Kind.Quote, Node(Kind.List, item)),
+        ];
+
+        nodes.ShouldAllBe(node => SurfaceSupport.CanEdit(node));
+    }
+
+    [Fact]
+    public void ListItemHoldingOnlyNestedLists_StaysEditable()
+    {
+        SurfaceSupport.CanEdit(Bullets(Bullets(Text()))).ShouldBeTrue();
+        SurfaceSupport.CanEdit(Bullets(Bullets(Text()), Bullets(Text()))).ShouldBeTrue();
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void EmptyStrongAndEmphasis_StayEditable(bool isDefault)
+    {
+        foreach (var wrapper in new[] { Empty(Kind.Strong, isDefault), Empty(Kind.Emphasis, isDefault) })
+        {
+            SurfaceSupport.CanEdit(Node(Kind.Paragraph, wrapper)).ShouldBeTrue();
+            SurfaceSupport.CanEdit(Bullets(wrapper)).ShouldBeTrue();
+            SurfaceSupport.CanEdit(Node(Kind.Paragraph, Link("/x", wrapper))).ShouldBeTrue();
+            SurfaceSupport.CanEditInline([wrapper]).ShouldBeTrue();
+            Only(Table(Cell(wrapper))).ShouldBe(SegmentKind.Table);
+        }
+    }
+
+    [Fact]
+    public void EmptyInlineCode_StaysEditable()
+    {
+        var code = new RichTextNode(Kind.InlineCode, Text: "");
+
+        SurfaceSupport.CanEdit(Node(Kind.Paragraph, code)).ShouldBeTrue();
+        SurfaceSupport.CanEdit(Bullets(code)).ShouldBeTrue();
+        SurfaceSupport.CanEditInline([code]).ShouldBeTrue();
+        Only(Table(Cell(code))).ShouldBe(SegmentKind.Table);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void EmptyTableCell_KeepsTheTableACard(bool isDefault) =>
+        Only(Table(Empty(Kind.TableCell, isDefault), Cell(Text()))).ShouldBe(SegmentKind.Table);
 
     [Fact]
     public void NestingDeeperThanTheDefaultLimit_IsLocked()

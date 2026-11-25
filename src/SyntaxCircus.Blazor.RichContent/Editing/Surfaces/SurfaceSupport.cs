@@ -5,7 +5,7 @@ namespace SyntaxCircus.Blazor.RichContent.Editing.Surfaces;
 
 /// <summary>
 /// Decides whether Write mode can edit a node without losing anything. Shape only: content the author can fix
-/// in place (an unsafe or empty link address, text over a limit, an emptied container) does not count against a node.
+/// in place (an unsafe or empty link address, text over a limit, an emptied paragraph) does not count against a node.
 /// </summary>
 internal static class SurfaceSupport
 {
@@ -66,6 +66,13 @@ internal static class SurfaceSupport
 
             if (node.Children.IsDefaultOrEmpty)
             {
+                // A surface cannot reliably show or enter these, so rebuilding around one would drop it,
+                // along with a link's address or a list's ordering. Other empty nodes can be typed into or lose nothing.
+                if (node.Kind is RichTextNodeKind.Link or RichTextNodeKind.List or RichTextNodeKind.Quote)
+                {
+                    return false;
+                }
+
                 continue;
             }
 
