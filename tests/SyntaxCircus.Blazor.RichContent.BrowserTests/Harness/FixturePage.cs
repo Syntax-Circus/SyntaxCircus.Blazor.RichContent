@@ -19,8 +19,11 @@ public static class FixturePage
     }
 
     /// <summary>
-    /// Clicks Save and returns the serialized document the host held when the click was handled. Everything the
-    /// page sent before the click has been handled by then.
+    /// Clicks Save and returns the serialized document the host held when the click was handled. The circuit
+    /// dispatches what the page sent in order, so every earlier message has been dispatched by then, but not
+    /// necessarily completed: an earlier asynchronous handler may still be awaiting. A test that clicked
+    /// <c>#save</c> itself must first await that save with <see cref="WaitForSaveAsync"/>, or this may return when
+    /// the earlier save shows.
     /// </summary>
     public static async Task<string> SaveAsync(IPage page)
     {

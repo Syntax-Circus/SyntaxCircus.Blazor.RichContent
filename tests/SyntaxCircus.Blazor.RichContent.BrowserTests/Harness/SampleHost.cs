@@ -1,25 +1,19 @@
-﻿using System.Net;
-using Microsoft.AspNetCore.Hosting;
-using Microsoft.AspNetCore.Mvc.Testing;
-using Microsoft.Extensions.Logging;
-using RichContent.Sample.Components;
-using SyntaxCircus.Blazor.RichContent.BrowserTests.Harness;
+﻿using SyntaxCircus.Blazor.RichContent.BrowserTests.Harness;
 
 [assembly: AssemblyFixture(typeof(SampleHost))]
 
 namespace SyntaxCircus.Blazor.RichContent.BrowserTests.Harness;
 
 /// <summary>
-/// Shared by the whole test run: the sample app on Kestrel (once as it is and once with its strict
-/// Content-Security-Policy) and one browser. Hub options are left at their defaults on purpose, so incoming
-/// messages are limited to 32 KB as they are for a host that changes nothing.
+/// Shared by the whole test run: the sample app (once as it is and once with its strict Content-Security-Policy,
+/// see <see cref="SampleServer"/>) and one browser.
 /// </summary>
 public sealed class SampleHost : IAsyncLifetime
 {
     private const string BrowserVariable = "RICHCONTENT_BROWSER";
 
-    private readonly SampleServer _server = new(strictCsp: false);
-    private readonly SampleServer _strictServer = new(strictCsp: true);
+    private SampleServer? _server;
+    private SampleServer? _strictServer;
     private IPlaywright? _playwright;
     private IBrowser? _browser;
 
@@ -29,14 +23,18 @@ public sealed class SampleHost : IAsyncLifetime
 
     public IBrowser Browser => _browser ?? throw new InvalidOperationException("The browser has not started.");
 
-    public IServiceProvider Services => _server.Services;
+    public SampleServer Server => _server ?? throw new InvalidOperationException("The sample has not started.");
 
-    public Uri Address(bool strictCsp = false) => (strictCsp ? _strictServer : _server).Address;
+    public SampleServer StrictServer => _strictServer ?? throw new InvalidOperationException("The sample has not started.");
+
+    public IServiceProvider Services => Server.Services;
+
+    public Uri Address(bool strictCsp = false) => (strictCsp ? StrictServer : Server).Address;
 
     public async ValueTask InitializeAsync()
     {
-        _server.Start();
-        _strictServer.Start();
+        _server = SampleServer.Start();
+        _strictServer = SampleServer.Start(strictCsp: true);
 
         _playwright = await Playwright.CreateAsync();
         var type = BrowserName switch
@@ -57,8 +55,24 @@ public sealed class SampleHost : IAsyncLifetime
         }
 
         _playwright?.Dispose();
-        await _server.DisposeAsync();
-        await _strictServer.DisposeAsync();
+        var unclaimed = new List<ServerFailure>();
+        foreach (var server in new[] { _server, _strictServer })
+        {
+            if (server is not null)
+            {
+                await server.DisposeAsync();
+
+                // Taken after the server has stopped, so that stopping it is covered too.
+                unclaimed.AddRange(server.Log.TakeFailures());
+            }
+        }
+
+        // The last chance to notice anything logged after the test that caused it had ended. Failing here fails
+        // the run, although no single test.
+        if (unclaimed.Count > 0)
+        {
+            Assert.Fail("The shared sample servers logged failures that no test claimed:" + Environment.NewLine + string.Join(Environment.NewLine, unclaimed));
+        }
     }
 
     private static class BrowserTypeNames
@@ -66,23 +80,5 @@ public sealed class SampleHost : IAsyncLifetime
         public const string Chromium = "chromium";
         public const string Firefox = "firefox";
         public const string Webkit = "webkit";
-    }
-
-    private sealed class SampleServer(bool strictCsp) : WebApplicationFactory<App>
-    {
-        public Uri Address => ClientOptions.BaseAddress;
-
-        public void Start()
-        {
-            // A real server on a free loopback port: the browser cannot reach the in-memory test server.
-            UseKestrel(kestrel => kestrel.Listen(IPAddress.Loopback, 0));
-            StartServer();
-        }
-
-        protected override void ConfigureWebHost(IWebHostBuilder builder)
-        {
-            builder.UseSetting("Sample:StrictCsp", strictCsp ? "true" : "false");
-            builder.ConfigureLogging(logging => logging.SetMinimumLevel(LogLevel.Warning));
-        }
     }
 }

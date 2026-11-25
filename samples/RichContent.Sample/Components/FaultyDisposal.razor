@@ -1,0 +1,27 @@
+@namespace RichContent.Sample.Components
+@using Microsoft.JSInterop
+@implements IAsyncDisposable
+@inject IJSRuntime JS
+
+<p id="faulty-disposal">A component whose disposal fails.</p>
+
+@code {
+    /// <summary>
+    /// <c>throw</c> throws from disposal. <c>js</c> calls into the browser from disposal, which throws
+    /// <see cref="JSDisconnectedException"/> once the browser has gone: the usual mistake when releasing a JS module.
+    /// </summary>
+    [Parameter, EditorRequired] public string Kind { get; set; } = "";
+
+    public async ValueTask DisposeAsync()
+    {
+        GC.SuppressFinalize(this);
+        if (Kind == "js")
+        {
+            await JS.InvokeVoidAsync("console.debug", "disposing");
+        }
+        else
+        {
+            throw new InvalidOperationException("Deliberate fault: disposal.");
+        }
+    }
+}

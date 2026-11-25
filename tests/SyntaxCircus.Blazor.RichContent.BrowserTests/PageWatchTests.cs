@@ -7,7 +7,8 @@ namespace SyntaxCircus.Blazor.RichContent.BrowserTests;
 
 /// <summary>
 /// Shows that the failure detection every browser test relies on does detect. Each test causes a failure and
-/// takes it from the watch, so that the test itself can pass.
+/// takes it from the watch, so that the test itself can pass. <see cref="ServerFailureTests"/> does the same for
+/// the server's side.
 /// </summary>
 public class PageWatchTests(SampleHost host) : BrowserTest(host)
 {
@@ -16,6 +17,8 @@ public class PageWatchTests(SampleHost host) : BrowserTest(host)
     private const string AddInlineScript =
         "() => { const script = document.createElement('script'); script.textContent = 'window.ran = true'; document.head.appendChild(script); }";
     private const string ThrowLater = "() => { setTimeout(() => { throw new Error('deliberate page error'); }, 0); }";
+    private const string RejectUnhandled = "() => { Promise.reject(new Error('deliberate rejection')); }";
+    private const string CloseSockets = "() => window.__pageWatch.closeSockets()";
 
     [Fact]
     public async Task ConsoleError_IsRecorded()
@@ -29,14 +32,16 @@ public class PageWatchTests(SampleHost host) : BrowserTest(host)
         failure.Detail.ShouldContain("deliberate console error");
     }
 
-    [Fact]
-    public async Task UncaughtError_IsRecorded()
+    [Theory]
+    [InlineData(ThrowLater, "deliberate page error")]
+    [InlineData(RejectUnhandled, "deliberate rejection")]
+    public async Task UncaughtErrorOrRejection_IsRecorded(string cause, string message)
     {
         await OpenFixtureAsync("empty");
 
-        await Page.EvaluateAsync(ThrowLater);
+        await Page.EvaluateAsync(cause);
 
-        (await Watch.TakeFailuresAsync()).ShouldContain(f => f.Kind == PageFailureKind.PageError && f.Detail.Contains("deliberate page error"));
+        (await Watch.TakeFailuresAsync()).ShouldContain(f => f.Kind == PageFailureKind.PageError && f.Detail.Contains(message));
     }
 
     [Theory]
@@ -53,24 +58,30 @@ public class PageWatchTests(SampleHost host) : BrowserTest(host)
     }
 
     [Fact]
+    public async Task CspViolation_WhileThePageLoads_IsRecorded()
+    {
+        await using var server = SampleServer.Start(strictCsp: true, faults: true);
+
+        // The image is in the HTML the server sends, so it is blocked before any script of the page has run.
+        await Page.GotoAsync(new Uri(server.Address, "faults?foreignImage=true").AbsoluteUri);
+        await Expect(Page.Locator("#faults")).ToHaveAttributeAsync("data-interactive", "true", new() { Timeout = 30_000 });
+
+        (await Watch.TakeFailuresAsync()).ShouldContain(f => f.Kind == PageFailureKind.CspViolation && f.Detail.StartsWith("img-src"));
+
+        // Leave before the server goes away, or its going would look like a lost connection.
+        await Page.GotoAsync("about:blank");
+        await Watch.TakeFailuresAsync();
+    }
+
+    [Fact]
     public async Task MessageOverTheDefaultLimit_LosesTheConnection_AndIsRecorded()
     {
         await OpenFixtureAsync("everything");
 
         // Blocks mode sends a field's whole value in one message.
         await Page.Locator("[data-block-id=cta]").GetByLabel("Body").FillAsync(new string('x', 40 * 1024));
-        var failures = new List<PageFailure>();
-        var deadline = DateTime.UtcNow.AddSeconds(15);
-        while (!failures.Any(f => f.Kind == PageFailureKind.ConnectionLost) && DateTime.UtcNow < deadline)
-        {
-            failures.AddRange(await Watch.TakeFailuresAsync());
-        }
 
-        failures.ShouldContain(f => f.Kind == PageFailureKind.ConnectionLost);
-
-        // Blazor goes on to reconnect and may log more; that is part of the failure this test caused.
-        await Page.CloseAsync();
-        await Watch.TakeFailuresAsync();
+        await ShouldRecordALostConnectionAsync();
     }
 
     [Fact]
@@ -85,18 +96,65 @@ public class PageWatchTests(SampleHost host) : BrowserTest(host)
         (await Watch.TakeFailuresAsync()).ShouldBeEmpty();
     }
 
+    [Fact]
+    public async Task BeforeUnloadOnAPageThatStays_DoesNotHideALostConnection()
+    {
+        await OpenFixtureAsync("empty");
+        await Page.RouteAsync("**/nothing-to-show", route => route.FulfillAsync(new() { Status = 204 }));
+
+        // A navigation answered with no content starts to unload the page and then leaves it where it is. A
+        // download or a mailto: link does the same.
+        await Page.EvaluateAsync("() => { window.dispatchEvent(new Event('beforeunload')); location.href = '/nothing-to-show'; }");
+        await Page.EvaluateAsync(CloseSockets);
+
+        await ShouldRecordALostConnectionAsync();
+    }
+
+    [Fact]
+    public async Task ALossWellAfterBeforeUnload_IsRecorded_EvenIfThePageThenReloads()
+    {
+        await OpenFixtureAsync("empty");
+        await Page.EvaluateAsync("() => { window.dispatchEvent(new Event('beforeunload')); }");
+        await Task.Delay(TimeSpan.FromSeconds(1.5), TestContext.Current.CancellationToken);
+
+        // What Blazor does when its circuit is gone: the connection drops, and then it reloads the page.
+        await Page.EvaluateAsync(CloseSockets);
+        await Page.ReloadAsync();
+        await Expect(Page.Locator("#fixture")).ToHaveAttributeAsync("data-interactive", "true");
+
+        (await Watch.TakeFailuresAsync()).ShouldContain(f => f.Kind == PageFailureKind.ConnectionLost);
+    }
+
+    [Fact]
+    public async Task APageShownAgainAfterPageHide_IsWatchedAgain()
+    {
+        await OpenFixtureAsync("empty");
+
+        // What the back/forward cache does to a page: hidden, then shown again.
+        await Page.EvaluateAsync(
+            """
+            () => {
+                window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true }));
+                window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }));
+            }
+            """);
+        await Page.EvaluateAsync(CloseSockets);
+
+        await ShouldRecordALostConnectionAsync();
+    }
+
     [Theory]
     [InlineData(LogError, false, PageFailureKind.ConsoleError)]
     [InlineData(LoadForeignImage, true, PageFailureKind.CspViolation)]
     [InlineData(ThrowLater, false, PageFailureKind.PageError)]
     public async Task ATest_FailsWhenItEnds_IfThePageReportedAFailure(string cause, bool strictCsp, PageFailureKind kind)
     {
-        // A second test instance, driven by hand the way xunit drives one.
-        var probe = new Probe(Host);
-        await probe.InitializeAsync();
-        await probe.RunAsync(cause, strictCsp);
+        await using var server = SampleServer.Start(strictCsp);
+        var probe = await ProbeTest.StartAsync(Host, server);
+        await probe.OpenAsync("fixture/empty");
+        await probe.CurrentPage.EvaluateAsync(cause);
 
-        var thrown = await Should.ThrowAsync<FailException>(() => probe.DisposeAsync().AsTask());
+        var thrown = await Should.ThrowAsync<FailException>(probe.EndAsync);
 
         thrown.Message.ShouldContain(kind.ToString());
     }
@@ -148,12 +206,19 @@ public class PageWatchTests(SampleHost host) : BrowserTest(host)
         (await Watch.TakeFailuresAsync()).ShouldHaveSingleItem().Kind.ShouldBe(PageFailureKind.ConsoleError);
     }
 
-    private sealed class Probe(SampleHost host) : BrowserTest(host)
+    private async Task ShouldRecordALostConnectionAsync()
     {
-        public async Task RunAsync(string cause, bool strictCsp)
+        var failures = new List<PageFailure>();
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        while (!failures.Any(f => f.Kind == PageFailureKind.ConnectionLost) && DateTime.UtcNow < deadline)
         {
-            await OpenFixtureAsync("empty", strictCsp: strictCsp);
-            await Page.EvaluateAsync(cause);
+            failures.AddRange(await Watch.TakeFailuresAsync());
         }
+
+        failures.ShouldContain(f => f.Kind == PageFailureKind.ConnectionLost);
+
+        // Blazor goes on to reconnect and may log more; that is part of the failure this test caused.
+        await Page.CloseAsync();
+        await Watch.TakeFailuresAsync();
     }
 }

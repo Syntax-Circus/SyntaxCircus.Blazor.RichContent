@@ -30,10 +30,32 @@ public sealed class PageWatch
             document.addEventListener('securitypolicyviolation', event =>
                 report('CspViolation', `${event.violatedDirective} blocked ${event.blockedURI || 'inline content'}`), true);
 
-            // Leaving the page closes its socket, which is not a lost connection.
+            // Leaving the page closes its socket, which is not a lost connection. Only pagehide shows that the page
+            // really is going: beforeunload also fires when it then stays (a download, a mailto: link, a response
+            // with no content, a cancelled navigation). A page can be shown again, from the back/forward cache.
+            //
+            // Chromium and WebKit close the socket of a departing page without telling it. Firefox tells it, just
+            // after beforeunload and before pagehide, however long the navigation then takes. So a loss that
+            // follows beforeunload closely is held: pagehide discards it, and if the page is still here when the
+            // watch next looks, it is recorded. Any other loss is reported at once, so that a reload cannot take
+            // it away.
+            const navigationClosesWithin = 1000;
             let leaving = false;
-            window.addEventListener('beforeunload', () => leaving = true);
-            window.addEventListener('pagehide', () => leaving = true);
+            let unloadAskedAt = -Infinity;
+            let held = [];
+            window.addEventListener('beforeunload', () => unloadAskedAt = performance.now());
+            window.addEventListener('pagehide', () => {
+                leaving = true;
+                held = [];
+            });
+            window.addEventListener('pageshow', () => leaving = false);
+            const lost = detail => {
+                if (performance.now() - unloadAskedAt < navigationClosesWithin) {
+                    held.push(detail);
+                } else {
+                    report('ConnectionLost', detail);
+                }
+            };
 
             const NativeWebSocket = window.WebSocket;
             const open = new Set();
@@ -48,7 +70,7 @@ public sealed class PageWatch
                     this.addEventListener('close', event => {
                         open.delete(this);
                         if (!leaving) {
-                            report('ConnectionLost', `the Blazor socket closed (code ${event.code} ${event.reason})`);
+                            lost(`the Blazor socket closed (code ${event.code} ${event.reason})`);
                         }
                     });
                 }
@@ -56,13 +78,22 @@ public sealed class PageWatch
 
             window.__pageWatch = {
                 openSockets: () => open.size,
-                closeSockets: () => open.forEach(socket => socket.close()),
+                openTokens: () => [...open].map(socket => new URL(socket.url).searchParams.get('id')),
+                // Resolves once they have closed and been dealt with. Blazor reconnects at once, so waiting for
+                // openSockets to reach zero afterwards can miss the moment.
+                closeSockets: () => Promise.all([...open].map(socket => new Promise(resolve => {
+                    socket.addEventListener('close', () => resolve(), { once: true });
+                    socket.close();
+                }))),
+                reportHeld: () => Promise.all(held.splice(0).map(detail => report('ConnectionLost', detail))),
             };
         })();
         """;
 
     private readonly IBrowserContext _context;
     private readonly ConcurrentQueue<PageFailure> _failures = new();
+    private readonly ConcurrentQueue<Task> _negotiations = new();
+    private readonly ConcurrentDictionary<string, string> _connectionIdsByToken = new(StringComparer.Ordinal);
     private volatile bool _outage;
 
     private PageWatch(IBrowserContext context) => _context = context;
@@ -78,6 +109,13 @@ public sealed class PageWatch
             }
         };
         context.WebError += (_, error) => watch.Add(new(PageFailureKind.PageError, error.Error));
+        context.Response += (_, response) =>
+        {
+            if (new Uri(response.Url).AbsolutePath.EndsWith("/_blazor/negotiate", StringComparison.Ordinal))
+            {
+                watch._negotiations.Enqueue(watch.ReadNegotiationAsync(response));
+            }
+        };
         await context.ExposeFunctionAsync<string, string, bool>(ReportBinding, (kind, detail) =>
         {
             watch.Add(new(Enum.Parse<PageFailureKind>(kind), detail));
@@ -103,12 +141,36 @@ public sealed class PageWatch
         return taken;
     }
 
-    public async Task AssertCleanAsync()
+    /// <summary>
+    /// The SignalR connection ids behind the page's open Blazor sockets, which is how a server's log names them.
+    /// </summary>
+    internal async Task<IReadOnlyList<string>> OpenConnectionIdsAsync(IPage page)
     {
-        await FlushAsync();
-        if (!_failures.IsEmpty)
+        var tokens = await page.EvaluateAsync<string[]>("() => window.__pageWatch?.openTokens() ?? []");
+        await Task.WhenAll(_negotiations);
+        return
+        [
+            .. tokens.Select(token => _connectionIdsByToken.TryGetValue(token, out var id)
+                ? id
+                : throw new ShouldAssertException("The watch did not see the negotiation of an open Blazor connection.")),
+        ];
+    }
+
+    // The socket's address carries the connection token; the server's log names the connection id.
+    private async Task ReadNegotiationAsync(IResponse response)
+    {
+        try
         {
-            Assert.Fail("The page reported failures:" + Environment.NewLine + string.Join(Environment.NewLine, _failures));
+            if (await response.JsonAsync() is { } body
+                && body.TryGetProperty("connectionToken", out var token)
+                && body.TryGetProperty("connectionId", out var id))
+            {
+                _connectionIdsByToken[token.GetString()!] = id.GetString()!;
+            }
+        }
+        catch (PlaywrightException)
+        {
+            // The page left before the body was read, so there will be no socket to look up.
         }
     }
 
@@ -147,14 +209,15 @@ public sealed class PageWatch
     }
 
     // Events arrive asynchronously. A short timer in each page, answered over the same channel, lets queued
-    // violation events and console messages arrive first.
+    // violation events and console messages arrive first. A page that is still here then reports what it held.
     private async Task FlushAsync()
     {
         foreach (var page in _context.Pages)
         {
             if (!page.IsClosed)
             {
-                await page.EvaluateAsync("() => new Promise(resolve => setTimeout(resolve, 100))");
+                await page.EvaluateAsync(
+                    "async () => { await new Promise(resolve => setTimeout(resolve, 100)); await window.__pageWatch?.reportHeld(); }");
             }
         }
     }
