@@ -145,6 +145,7 @@ public class ResilienceTests(SampleHost host) : CardTest(host)
     }
 
     [Theory]
+    // Each is a field or element that the switch replaces.
     [InlineData("surface")]
     [InlineData("code")]
     [InlineData("field")]
@@ -163,16 +164,32 @@ public class ResilienceTests(SampleHost host) : CardTest(host)
         {
             "surface" => Surface("prose"),
             "code" => Page.Locator("[data-block-id=prose] textarea[data-rt-code]").First,
-            _ => Page.Locator("[data-block-id=cta]").GetByLabel("Heading"),
+            "field" => Page.Locator("[data-block-id=prose] [data-rt-card=image]").First.GetByLabel("Caption"),
+            _ => Page.Locator("[data-block-id=prose] textarea").First,
         }).ElementHandleAsync();
         await Page.EvaluateAsync("() => window.hold()");
 
-        await ModeButton(fromBlocks ? "Write" : "Blocks").ClickAsync();
+        // The host's switch: unlike the editor's own, its click makes nothing read-only. By script, past the fixture.
+        await Page.Locator(fromBlocks ? "#mode-write" : "#mode-blocks").EvaluateAsync("button => button.click()");
         // Everything the server has sent is held back, so the old view is still on show.
-        await target.EvaluateAsync("element => element.focus()");
+        await Task.Delay(TimeSpan.FromMilliseconds(500), TestContext.Current.CancellationToken);
+        await target.EvaluateAsync(
+            """
+            element => {
+                element.focus();
+                if (element.setSelectionRange) {
+                    element.setSelectionRange(element.value.length, element.value.length);
+                    return;
+                }
+
+                const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+                const text = walker.nextNode();
+                getSelection().collapse(text, text.length);
+            }
+            """);
         await Page.Keyboard.TypeAsync(Typed);
-        var shown = await target.EvaluateAsync<bool>(
-            "(element, typed) => (element.value ?? element.textContent).includes(typed)", Typed);
+        (await target.EvaluateAsync<bool>("(element, typed) => (element.value ?? element.textContent).includes(typed)", Typed))
+            .ShouldBeTrue("nothing has told the page to stop taking it");
         await Task.Delay(TimeSpan.FromSeconds(1), TestContext.Current.CancellationToken);
         await Page.EvaluateAsync("() => window.resume()");
 
@@ -185,15 +202,7 @@ public class ResilienceTests(SampleHost host) : CardTest(host)
             await ShouldShowBlocksAsync();
         }
 
-        var saved = await SaveAsync(Page);
-        if (shown)
-        {
-            saved.ShouldContain(Typed, Case.Sensitive, "it could be typed, so it must be kept");
-        }
-        else
-        {
-            saved.ShouldBe(Original("everything"));
-        }
+        (await SaveAsync(Page)).ShouldContain(Typed, Case.Sensitive);
     }
 
     [Fact]
@@ -251,6 +260,7 @@ public class ResilienceTests(SampleHost host) : CardTest(host)
         await Expect(ModeButton("Write")).ToHaveAttributeAsync("aria-pressed", "true");
         (await Start.TextContentAsync()).ShouldBe(shown);
         await Expect(Start).ToHaveAttributeAsync("contenteditable", "true");
+        await Expect(Start).Not.ToHaveAttributeAsync("inert", new System.Text.RegularExpressions.Regex(".*"));
         await Expect(Reported("surface-unconvertible")).ToHaveCountAsync(1);
 
         // The host's own switch is refused too.
@@ -260,6 +270,7 @@ public class ResilienceTests(SampleHost host) : CardTest(host)
         await SaveAsync(Page);
         await Expect(Page.Locator(".rt-switch-refused")).ToBeVisibleAsync();
         await Expect(Start).ToHaveAttributeAsync("contenteditable", "true");
+        await Expect(Start).Not.ToHaveAttributeAsync("inert", new System.Text.RegularExpressions.Regex(".*"));
         (await Start.TextContentAsync()).ShouldBe(shown);
 
         await Start.FocusAsync();
@@ -286,8 +297,241 @@ public class ResilienceTests(SampleHost host) : CardTest(host)
             }
             """);
 
-        await Expect(Page.Locator("[data-rt-surface][contenteditable=true]")).ToHaveCountAsync(0);
+        await Expect(Page.Locator(EditableSurfaces)).ToHaveCountAsync(0);
         await Expect(area).Not.ToBeEditableAsync();
+    }
+
+    // While window.loseAnswers is set, the page's answers to .NET's calls never leave it, as in a connection that is
+    // failing. Everything else it sends still goes.
+    private const string LoseAnswersScript = """
+        (() => {
+            const Watched = window.WebSocket;
+            window.WebSocket = class extends Watched {
+                send(data) {
+                    const text = typeof data === 'string' ? data : new TextDecoder().decode(data);
+                    if (!window.loseAnswers || !text.includes('EndInvokeJSFromDotNet')) {
+                        super.send(data);
+                    }
+                }
+            };
+        })();
+        """;
+
+    [Fact]
+    public async Task ARedrawWhoseAnswerWasLost_ThenAHostSwitch_KeepsWhatWasTypedInBetween()
+    {
+        await Page.AddInitScriptAsync(LoseAnswersScript);
+        await OpenFixtureAsync("everything", "write");
+        await ShouldBeWritingAsync();
+        await Page.EvaluateAsync("() => { window.loseAnswers = true; }");
+        await Page.Locator("#replace-other").ClickAsync();
+        // The browser has drawn it; .NET cannot know.
+        await Expect(FirstParagraph).ToHaveTextAsync(Fixtures.ReplacementText);
+        // And what is typed now does not get through either.
+        await TapAsync("hang");
+        await PlaceCaretAsync(FirstParagraph);
+        await Page.Keyboard.InsertTextAsync(Typed);
+
+        // The connection is good again, and the host switches before anything has been tried again.
+        await Page.EvaluateAsync("() => { window.loseAnswers = false; document.getElementById('mode-blocks').click(); }");
+
+        await ShouldShowBlocksAsync();
+        TextOf(Nodes(await SaveAsync(Page), "prose")[0]).ShouldBe(Fixtures.ReplacementText + Typed);
+    }
+
+    [Theory]
+    [InlineData("surface")]
+    [InlineData("code")]
+    public async Task ADisablingSyncThatCarriesARedraw_StillSendsWhatIsOutstanding(string kind)
+    {
+        await OpenFixtureAsync("everything", "write");
+        await ShouldBeWritingAsync();
+        var target = kind == "code" ? await CodeAsync("prose") : Surface("prose");
+
+        // The script alone: an edit that has not got through, then a disabling sync that sends again the redraw the
+        // browser already has.
+        var sent = await target.EvaluateAsync<int>(
+            """
+            async (element, kind) => {
+                const part = element.richContentSurface ?? element.richContentCode;
+                let count = 0;
+                part.transport.invoke = () => (++count === 1 ? new Promise(() => {}) : Promise.resolve(true));
+                if (kind === 'code') {
+                    element.value += ' unsent';
+                } else {
+                    element.querySelector('p').append(' unsent');
+                }
+
+                element.dispatchEvent(new InputEvent('input', { bubbles: true }));
+                const module = await import(
+                    `./_content/SyntaxCircus.Blazor.RichContent/surface/${kind === 'code' ? 'code' : 'surface'}.js`);
+                const before = count;
+                module.sync(element, null, true, true, part.generation);
+                return count - before;
+            }
+            """,
+            kind);
+
+        sent.ShouldBeGreaterThan(0);
+    }
+
+    // ---- Undo and the freeze ----
+
+    [Theory]
+    // None of these redraws the surface typed in. The last two make the whole editor read-only for a while.
+    [InlineData("remove-asked")]
+    [InlineData("card-move")]
+    [InlineData("block-move")]
+    [InlineData("switch-refused-late")]
+    public async Task NativeUndo_OfEarlierTyping_SurvivesTheEditorBeingReadOnlyForAWhile(string what)
+    {
+        await OpenFixtureAsync("everything", "write");
+        await ShouldBeWritingAsync();
+        var surface = Surface("more-prose");
+        await PlaceCaretAsync(surface.Locator(":scope > p").First);
+        await Page.Keyboard.TypeAsync("UNDOME");
+        await WaitUntilAcknowledgedAsync();
+        await surface.EvaluateAsync("e => { e.kept = true; }");
+
+        var card = Card("prose", "code").First;
+        switch (what)
+        {
+            case "remove-asked":
+                await card.Locator(".rt-card-header").GetByRole(AriaRole.Button, new() { Name = "Remove", Exact = true }).ClickAsync();
+                await card.GetByRole(AriaRole.Button, new() { Name = "No", Exact = true }).ClickAsync();
+                break;
+            case "card-move":
+                await card.GetByRole(AriaRole.Button, new() { Name = "Move up", Exact = true }).ClickAsync();
+                await WaitForChangesAsync(1);
+                break;
+            case "block-move":
+                await Page.Locator("[data-block-id=callout-warning] > header")
+                    .GetByRole(AriaRole.Button, new() { Name = "Move up", Exact = true }).ClickAsync();
+                await WaitForChangesAsync(1);
+                break;
+            default:
+                // Too much for one edit, with the switch clicked in the same task: it is refused only once under way.
+                await Surface("prose").EvaluateAsync(
+                    """
+                    (surface, button) => {
+                        surface.querySelector(':scope > p').textContent = 'x'.repeat(2_200_000);
+                        surface.dispatchEvent(new InputEvent('input', { bubbles: true }));
+                        document.querySelector(button).click();
+                    }
+                    """,
+                    BlocksButton);
+                await Expect(Page.Locator(".rt-switch-refused")).ToBeVisibleAsync(new() { Timeout = 60_000 });
+                break;
+        }
+
+        await Expect(Page.Locator(EditableSurfaces)).ToHaveCountAsync(
+            await Page.Locator("[data-rt-surface]").CountAsync(), new() { Timeout = 30_000 });
+        (await surface.EvaluateAsync<bool>("e => e.kept === true")).ShouldBeTrue("the surface was not drawn again");
+        await surface.FocusAsync();
+        for (var attempt = 0; attempt < 6 && (await surface.TextContentAsync())!.Contains("UNDOME", StringComparison.Ordinal); attempt++)
+        {
+            await Page.Keyboard.PressAsync("ControlOrMeta+z");
+            await Task.Delay(200, TestContext.Current.CancellationToken);
+        }
+
+        (await surface.TextContentAsync()).ShouldBe("A second rich text block, next to the first.");
+    }
+
+    [Fact]
+    public async Task NothingGetsIntoAFrozenEditor_ThoughTheFocusWasInIt()
+    {
+        await Page.AddInitScriptAsync(HeldRenderTests.HoldScript);
+        await OpenFixtureAsync("everything", "write");
+        await ShouldBeWritingAsync();
+        var surface = Surface("more-prose");
+        var paragraph = surface.Locator(":scope > p").First;
+        await PlaceCaretAsync(paragraph);
+        await Page.Keyboard.TypeAsync("typed ");
+        await WaitUntilAcknowledgedAsync();
+        var shown = await surface.InnerHTMLAsync();
+        await Page.EvaluateAsync("() => window.hold()");
+
+        // By script, so that the focus is still in the surface when the click freezes it.
+        await Card("prose", "code").First.GetByRole(AriaRole.Button, new() { Name = "Move up", Exact = true })
+            .EvaluateAsync("button => button.click()");
+
+        async Task ShouldBeAsBeforeAsync(string after) => (await surface.InnerHTMLAsync()).ShouldBe(shown, after);
+
+        await Page.Keyboard.TypeAsync(Typed);
+        await Page.Keyboard.PressAsync("Backspace");
+        await Page.Keyboard.PressAsync("Enter");
+        await ShouldBeAsBeforeAsync("keys");
+        await Page.Keyboard.PressAsync("ControlOrMeta+a");
+        await Page.Keyboard.PressAsync("Delete");
+        await ShouldBeAsBeforeAsync("select all and delete");
+        await Page.Keyboard.PressAsync("ControlOrMeta+z");
+        await Page.Keyboard.PressAsync("ControlOrMeta+y");
+        await Page.Keyboard.PressAsync("ControlOrMeta+Shift+z");
+        await ShouldBeAsBeforeAsync("undo and redo");
+        await surface.EvaluateAsync("() => { document.execCommand('insertText', false, 'EXEC'); document.execCommand('bold'); }");
+        await ShouldBeAsBeforeAsync("execCommand");
+        (await surface.EvaluateAsync<bool>(
+            """
+            async surface => {
+                const module = await import('./_content/SyntaxCircus.Blazor.RichContent/surface/surface.js');
+                return module.command(surface, 'bold') || module.command(surface, 'bullets');
+            }
+            """)).ShouldBeFalse();
+        await ShouldBeAsBeforeAsync("toolbar commands");
+        await PasteAsync(1, 40);
+        await ShouldBeAsBeforeAsync("a paste");
+        await surface.EvaluateAsync("surface => surface.focus()");
+        await Page.Keyboard.TypeAsync("FOCUSED");
+        await ShouldBeAsBeforeAsync("focus by script");
+        await paragraph.ClickAsync(new() { Force = true });
+        await Page.Keyboard.TypeAsync("CLICKED");
+        await ShouldBeAsBeforeAsync("a click");
+        if (SampleHost.BrowserName == "chromium")
+        {
+            var session = await Page.Context.NewCDPSessionAsync(Page);
+            await session.SendAsync("Input.imeSetComposition", new() { ["text"] = "KOMP", ["selectionStart"] = 4, ["selectionEnd"] = 4 });
+            await session.SendAsync("Input.insertText", new() { ["text"] = "COMPOSED" });
+            await ShouldBeAsBeforeAsync("an input method");
+        }
+
+        await Page.EvaluateAsync("() => window.resume()");
+        await Expect(Page.Locator("[data-rt-surface]:not([contenteditable=true]), [data-rt-surface][inert]")).ToHaveCountAsync(0);
+        await PlaceCaretAsync(paragraph);
+        await Page.Keyboard.TypeAsync("after");
+        TextOf(Nodes(await SaveAsync(Page), "more-prose")[0]).ShouldEndWith("typed after");
+    }
+
+    [Fact]
+    public async Task AThaw_LeavesInertAsItWas()
+    {
+        await OpenFixtureAsync("everything", "write");
+        await ShouldBeWritingAsync();
+        // Set by something else, on one surface.
+        await Surface("more-prose").EvaluateAsync("surface => { surface.inert = true; }");
+
+        await Card("prose", "code").First.GetByRole(AriaRole.Button, new() { Name = "Move up", Exact = true }).ClickAsync();
+        await WaitForChangesAsync(1);
+
+        await Expect(Page.Locator("[data-rt-surface][inert]")).ToHaveCountAsync(1);
+        (await Surface("more-prose").EvaluateAsync<bool>("surface => surface.inert")).ShouldBeTrue();
+        await WaitForSurfacesAsync(Page);
+    }
+
+    [Fact]
+    public async Task ACompositionJustBeforeAFreeze_IsDelivered()
+    {
+        Assert.SkipUnless(SampleHost.BrowserName == "chromium", "Only Chromium's protocol can drive an input method.");
+        await OpenFixtureAsync("everything", "write");
+        await ShouldBeWritingAsync();
+        await PlaceCaretAsync(Surface("more-prose").Locator(":scope > p").First);
+        var session = await Page.Context.NewCDPSessionAsync(Page);
+        await session.SendAsync("Input.imeSetComposition", new() { ["text"] = Typed, ["selectionStart"] = 8, ["selectionEnd"] = 8 });
+
+        await Card("prose", "code").First.GetByRole(AriaRole.Button, new() { Name = "Move up", Exact = true })
+            .EvaluateAsync("button => button.click()");
+        await WaitForChangesAsync(1);
+
+        TextOf(Nodes(await SaveAsync(Page), "more-prose")[0]).ShouldEndWith(Typed);
     }
 
     // ---- Replacement by the host ----
@@ -663,6 +907,39 @@ public class LoadFailureTests(SampleHost host) : CardTest(host)
         // What was caused on purpose: the failed request, and what the server logged about it.
         var page = await Watch.TakeFailuresAsync();
         page.ShouldAllBe(failure => failure.Kind == PageFailureKind.ConsoleError);
+        _server.Log.TakeFailures().ShouldNotBeEmpty();
+    }
+
+    [Fact]
+    public async Task TextNotYetDelivered_WhenAScriptCannotBeLoaded_IsSavedByTheFallback()
+    {
+        // The code card's script is asked for only when the first code card appears. The request is kept waiting.
+        var asked = new TaskCompletionSource<IRoute>();
+        await Page.RouteAsync(
+            new System.Text.RegularExpressions.Regex(@"/_content/SyntaxCircus\.Blazor\.RichContent/surface/code(\.[a-z0-9]+)?\.js"),
+            route =>
+            {
+                asked.TrySetResult(route);
+                return Task.CompletedTask;
+            });
+        await FixturePage.OpenAsync(Page, _server.Address, "empty", "write");
+        await Surface("start").ClickAsync();
+        await InsertAsync("Code block");
+        var request = await asked.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        var surface = Page.Locator("[data-rt-surface]").First;
+        await Expect(Page.Locator("[data-rt-surface]:not([data-rt-ready])")).ToHaveCountAsync(0);
+        await Expect(surface).ToHaveAttributeAsync("contenteditable", "true");
+        // What is typed now does not get through.
+        await TapAsync("hang");
+        await surface.FocusAsync();
+        await Page.Keyboard.InsertTextAsync("TYPEDBEFOREFAILURE");
+
+        await request.AbortAsync();
+
+        await Expect(Page.Locator(".rt-load-failed")).ToBeVisibleAsync(new() { Timeout = 30_000 });
+        await Expect(Page.Locator("[data-rt-surface]")).ToHaveCountAsync(0);
+        (await SaveAsync(Page)).ShouldContain("TYPEDBEFOREFAILURE", Case.Sensitive);
+        (await Watch.TakeFailuresAsync()).ShouldAllBe(failure => failure.Kind == PageFailureKind.ConsoleError);
         _server.Log.TakeFailures().ShouldNotBeEmpty();
     }
 

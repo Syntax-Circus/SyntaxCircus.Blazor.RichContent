@@ -85,6 +85,11 @@ internal sealed class WritingSession
 
     public void ReportScriptFailure() => ScriptFailed?.Invoke();
 
+    /// <summary>
+    /// True while parts are disabled only because the view is about to change, and so may be enabled again.
+    /// </summary>
+    public Func<bool> DisabledBriefly { get; set; } = () => false;
+
     /// <summary>The surface that last had the cursor, which is the one the toolbar acts on.</summary>
     public RichTextSurface? Surface { get; private set; }
 

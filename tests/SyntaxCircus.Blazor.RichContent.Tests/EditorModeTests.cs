@@ -245,6 +245,102 @@ public sealed class EditorModeTests : IDisposable
         editor.WaitForAssertion(() => IsWriting(editor).ShouldBeFalse(), TimeSpan.FromSeconds(10));
     }
 
+    private bool[] SyncedDisabled() => [.. _module.Invocations["sync"].Select(call => (bool)call.Arguments[2]!)];
+
+    [Fact]
+    public void ASwitchCancelledAfterItsReadOnlyAnswerWasLost_MakesTheSurfaceEditableAgain()
+    {
+        SetUpScript();
+        // The call arrives, and its answer never does.
+        _module.Setup<int?>("sync", invocation => (bool)invocation.Arguments[2]!);
+        var editor = Render(OneBlock(Paragraph("first")));
+
+        Switch(editor, "Blocks").Click();
+        SyncedDisabled().Last().ShouldBeTrue();
+        Switch(editor, "Write").Click();
+
+        // The browser may well be read-only now, so it must be told otherwise.
+        editor.WaitForAssertion(() => SyncedDisabled().Last().ShouldBeFalse(), TimeSpan.FromSeconds(5));
+        IsWriting(editor).ShouldBeTrue();
+        Surfaces(editor)[0].Disabled.ShouldBeFalse();
+    }
+
+    // Answers every synchronization, but only after a while, as over a slow connection.
+    private sealed class SlowScript(TimeSpan delay) : IJSRuntime, IJSObjectReference
+    {
+        public ValueTask<TValue> InvokeAsync<TValue>(string identifier, object?[]? args) => identifier switch
+        {
+            "import" => ValueTask.FromResult((TValue)(object)this),
+            "sync" => AnswerAsync<TValue>((int)args![4]!),
+            _ => ValueTask.FromResult(default(TValue)!),
+        };
+
+        public ValueTask<TValue> InvokeAsync<TValue>(string identifier, CancellationToken cancellationToken, object?[]? args) =>
+            InvokeAsync<TValue>(identifier, args);
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+
+        private async ValueTask<TValue> AnswerAsync<TValue>(int generation)
+        {
+            await Task.Delay(delay);
+            return (TValue)(object)generation;
+        }
+    }
+
+    [Fact]
+    public void AnswersSlowerThanTheTriesAreApart_StillLetASwitchFinish()
+    {
+        _context.Services.AddSingleton<IJSRuntime>(new SlowScript(TimeSpan.FromMilliseconds(500)));
+        // Every answer comes after the next try has been sent.
+        RetryAfter(TimeSpan.FromMilliseconds(80));
+        var editor = Render(OneBlock(Paragraph("first")));
+
+        Switch(editor, "Blocks").Click();
+
+        editor.WaitForAssertion(() => IsWriting(editor).ShouldBeFalse(), TimeSpan.FromSeconds(8));
+    }
+
+    [Theory]
+    // Who asked for the switch, and who calls it off before it has happened.
+    [InlineData("host", "author", true)]
+    [InlineData("author", "author", false)]
+    [InlineData("host", "host", false)]
+    [InlineData("author", "host", false)]
+    public async Task ACancelledSwitch_TellsAHostThatHoldsAnotherView(string asked, string cancelled, bool told)
+    {
+        SetUpScript();
+        _module.Setup<int?>("sync", invocation => (bool)invocation.Arguments[2]!);
+        var editor = Render(OneBlock(Paragraph("first")));
+
+        if (asked == "host")
+        {
+            editor.Render(parameters => parameters.Add(e => e.Mode, RichContentEditorMode.Blocks));
+        }
+        else
+        {
+            Switch(editor, "Blocks").Click();
+        }
+
+        if (cancelled == "author")
+        {
+            Switch(editor, "Write").Click();
+        }
+        else if (asked == "host")
+        {
+            editor.Render(parameters => parameters.Add(e => e.Mode, RichContentEditorMode.Write));
+        }
+        else
+        {
+            // A host that moves its own value away and back again.
+            editor.Render(parameters => parameters.Add(e => e.Mode, RichContentEditorMode.Blocks));
+            editor.Render(parameters => parameters.Add(e => e.Mode, RichContentEditorMode.Write));
+        }
+
+        await Task.Delay(300, Xunit.TestContext.Current.CancellationToken);
+        IsWriting(editor).ShouldBeTrue();
+        _modes.ToArray().ShouldBe(told ? [RichContentEditorMode.Write] : []);
+    }
+
     [Fact]
     public void APartWhoseScriptIsBroken_DoesNotHoldUpASwitch()
     {

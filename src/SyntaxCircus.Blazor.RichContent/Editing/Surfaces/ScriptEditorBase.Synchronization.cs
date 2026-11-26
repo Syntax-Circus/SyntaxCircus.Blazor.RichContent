@@ -204,8 +204,12 @@ public abstract partial class ScriptEditorBase
         var generation = ContentGeneration;
         var withContent = RedrawIsUnconfirmed;
         var number = ++_syncs;
-        if (!disabled)
+        if (disabled != _sentDisabled)
         {
+            // The browser may have it from now on, whether or not an answer ever says so.
+            _sentDisabled = disabled;
+            _sentDisabledSince = number;
+            _syncedDisabled = null;
             _confirmedReadOnly = false;
         }
 
@@ -213,16 +217,21 @@ public abstract partial class ScriptEditorBase
         // answering that it is read-only, the script sends again whatever may not have arrived, so that has been
         // handled by the time the answer is.
         var held = await module.InvokeAsync<int?>(
-            "sync", Element, withContent ? _redraw : null, disabled, withContent, generation);
+            "sync", Element, withContent ? _redraw : null, disabled, withContent, generation,
+            disabled && Session?.DisabledBriefly() == true);
         if (held is not null)
         {
-            _syncedDisabled = disabled;
             _scriptBroken = false;
-            // Only the latest answer says how the browser is now.
-            if (disabled && number == _syncs)
+            // An answer to anything sent since the value last changed will do, not only to the latest: tries can be
+            // closer together than a slow connection takes to answer.
+            if (number >= _sentDisabledSince)
             {
-                _confirmedReadOnly = true;
-                Session?.ReportReadOnly();
+                _syncedDisabled = disabled;
+                if (disabled)
+                {
+                    _confirmedReadOnly = true;
+                    Session?.ReportReadOnly();
+                }
             }
         }
 

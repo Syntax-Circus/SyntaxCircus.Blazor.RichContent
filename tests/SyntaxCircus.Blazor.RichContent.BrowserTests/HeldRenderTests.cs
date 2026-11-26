@@ -199,7 +199,7 @@ public class HeldRenderTests(SampleHost host) : CardTest(host)
     private async Task ShouldBeEditableAgainAsync()
     {
         await Expect(Page.Locator("[data-rt-surface]:not([data-rt-ready])")).ToHaveCountAsync(0);
-        await Expect(Page.Locator("[data-rt-surface][contenteditable=false]")).ToHaveCountAsync(0);
+        await Expect(Page.Locator(ReadOnlySurfaces)).ToHaveCountAsync(0);
         await Page.WaitForFunctionAsync(
             "() => [...document.querySelectorAll('[data-rt-editor] textarea, [data-rt-editor] input')].every(e => !e.readOnly)");
     }
@@ -213,7 +213,7 @@ public class HeldRenderTests(SampleHost host) : CardTest(host)
         await Button(CardAt("prose", "code"), "Move up").ClickAsync();
         await Task.Delay(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
 
-        (await Page.Locator("[data-rt-surface][contenteditable=true]").CountAsync()).ShouldBe(0);
+        (await Page.Locator(EditableSurfaces).CountAsync()).ShouldBe(0);
         (await Page.Locator("textarea[data-rt-code]").EvaluateAllAsync<bool>("areas => areas.every(a => a.readOnly)")).ShouldBeTrue();
         (await Page.Locator("[data-rt-card=image] input[type=text]").First.EvaluateAsync<bool>("e => e.readOnly")).ShouldBeTrue();
         await Page.EvaluateAsync("() => window.resume()");
@@ -304,7 +304,7 @@ public class HeldRenderTests(SampleHost host) : CardTest(host)
         // Blazor's reconnect dialog covers the page, so the click is made by script.
         await choice.EvaluateAsync("button => button.click()");
 
-        (await Page.Locator("[data-rt-surface][contenteditable=false]").CountAsync()).ShouldBe(0);
+        (await Page.Locator(ReadOnlySurfaces).CountAsync()).ShouldBe(0);
         await outage.RestoreAsync();
         await ShouldBeEditableAgainAsync();
         await PlaceCaretAsync(Surface("prose").Locator(":scope > h2"));
@@ -327,7 +327,7 @@ public class HeldRenderTests(SampleHost host) : CardTest(host)
             """);
         await Button(CardAt("prose", "code"), "Move up").ClickAsync();
         await WaitForChangesAsync(1);
-        (await Page.Locator("[data-rt-surface][contenteditable=true]").CountAsync()).ShouldBe(0);
+        (await Page.Locator(EditableSurfaces).CountAsync()).ShouldBe(0);
 
         var outage = await Watch.DropConnectionAsync(Page);
         await outage.RestoreAsync();

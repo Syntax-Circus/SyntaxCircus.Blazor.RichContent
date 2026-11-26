@@ -26,6 +26,7 @@ public abstract partial class ScriptEditorBase : ComponentBase, IAsyncDisposable
     // The latest redraw, kept to be sent again until the browser is known to have it.
     private object? _redraw;
     private int _confirmedGeneration;
+    // The Disabled the browser is known to have. Null from when another is sent until an answer shows it arrived.
     private bool? _syncedDisabled;
     private bool _started;
     private bool _ready;
@@ -34,9 +35,13 @@ public abstract partial class ScriptEditorBase : ComponentBase, IAsyncDisposable
     // The generation that was current at the latest rejection.
     private int _rejectedGeneration;
 
-    // Whether the browser has answered the latest synchronization by saying it is read-only.
+    // Whether the browser has answered that it is read-only, since last being asked to be anything else.
     private bool _confirmedReadOnly;
+
+    // The synchronizations sent, the Disabled the latest carried, and the number of the first to carry it.
     private int _syncs;
+    private bool? _sentDisabled;
+    private int _sentDisabledSince;
 
     // True while the latest call to a script that had drawn threw: nothing can be asked of it.
     private bool _scriptBroken;

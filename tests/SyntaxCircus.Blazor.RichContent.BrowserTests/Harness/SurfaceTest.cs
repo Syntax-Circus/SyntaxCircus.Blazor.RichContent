@@ -72,6 +72,15 @@ public abstract class SurfaceTest(SampleHost host) : BrowserTest(host)
         }
         """;
 
+    // A surface takes no input either because it is disabled, when it is not contenteditable, or because it is held for
+    // a while, when it is inert.
+
+    /// <summary>The writing surfaces that can be typed into.</summary>
+    protected const string EditableSurfaces = "[data-rt-surface][contenteditable=true]:not([inert])";
+
+    /// <summary>The writing surfaces that cannot.</summary>
+    protected const string ReadOnlySurfaces = "[data-rt-surface][contenteditable=false], [data-rt-surface][inert]";
+
     /// <summary>The nth writing surface of a block.</summary>
     protected ILocator Surface(string blockId, int index = 0) =>
         Page.Locator($"[data-block-id='{blockId}'] [data-rt-surface]").Nth(index);

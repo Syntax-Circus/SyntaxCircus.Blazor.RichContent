@@ -50,7 +50,7 @@ public class ModeSwitchTests(SampleHost host) : CardTest(host)
 
     private async Task ShouldBeEditableAsync()
     {
-        await Expect(Page.Locator("[data-rt-surface][contenteditable=false]")).ToHaveCountAsync(0);
+        await Expect(Page.Locator(ReadOnlySurfaces)).ToHaveCountAsync(0);
         await Page.WaitForFunctionAsync(
             "() => [...document.querySelectorAll('.doc-editor textarea, .doc-editor input')].every(field => !field.readOnly)",
             null,

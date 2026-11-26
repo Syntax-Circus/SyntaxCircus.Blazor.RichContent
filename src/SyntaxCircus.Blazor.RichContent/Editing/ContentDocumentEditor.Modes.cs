@@ -46,6 +46,7 @@ public partial class ContentDocumentEditor : IDisposable
         _session.RejectionsChanged += RejectionsChanged;
         _session.ScriptFailed += ScriptFailed;
         _session.ReadOnlyChanged += ReadOnlyChanged;
+        _session.DisabledBriefly = () => _pending is not null && !Disabled;
     }
 
     public void Dispose()
@@ -61,16 +62,16 @@ public partial class ContentDocumentEditor : IDisposable
 
     private void TakeMode()
     {
-        if (_modeParameter is null)
+        var before = _modeParameter;
+        _modeParameter = Mode;
+        if (before is null)
         {
             _shown = Mode;
         }
-        else if (_modeParameter != Mode)
+        else if (before != Mode)
         {
             RequestMode(Mode, SwitchOrigin.Host);
         }
-
-        _modeParameter = Mode;
     }
 
     private void ChooseMode(RichContentEditorMode mode) => RequestMode(mode, SwitchOrigin.Author);
@@ -97,7 +98,15 @@ public partial class ContentDocumentEditor : IDisposable
     {
         if (mode == _shown)
         {
-            _pending = null;
+            if (_pending is not null)
+            {
+                _pending = null;
+                // A host that asked for the other view, and has not itself come back, still holds it.
+                if (_modeParameter != _shown)
+                {
+                    _ = TellShownModeLaterAsync();
+                }
+            }
         }
         else if (Writing && _session.Rejected.Count > 0)
         {

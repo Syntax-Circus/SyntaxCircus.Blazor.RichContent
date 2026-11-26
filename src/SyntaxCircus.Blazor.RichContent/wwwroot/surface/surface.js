@@ -54,6 +54,7 @@ function release(surface) {
     delete surface.element.richContentSurface;
     delete surface.element.richContentRefresh;
     delete surface.element.richContentSettle;
+    hold(surface, false);
 }
 
 // An element that was removed can no longer be passed in, so its surface is found this way.
@@ -72,13 +73,60 @@ function flush(surface) {
     }
 }
 
-// Only a surface that holds a generation, having been drawn in full, can be typed into.
+// The focus and the selection leave the element. The surface still knows where the selection was.
+function withdraw(element) {
+    if (element.contains(document.activeElement)) {
+        document.activeElement.blur();
+    }
+
+    const selection = getSelection();
+    for (let i = 0; i < selection.rangeCount; i++) {
+        if (selection.getRangeAt(i).intersectsNode(element)) {
+            selection.removeAllRanges();
+            break;
+        }
+    }
+}
+
+// Takes a surface out of use for a while without touching contenteditable: turning that off and on again makes Firefox
+// forget its undo history, and the author is to be able to undo afterwards. It is made inert instead. That alone is
+// not enough, since Firefox goes on typing into an inert element that holds the selection, so the focus and the
+// selection leave first. wasInert is what the element had, which is put back.
+function hold(surface, on) {
+    const { element } = surface;
+    if (on) {
+        withdraw(element);
+        if (surface.wasInert === null) {
+            surface.wasInert = element.inert;
+            element.inert = true;
+        }
+    } else if (surface.wasInert !== null) {
+        element.inert = surface.wasInert;
+        surface.wasInert = null;
+    }
+}
+
+const isHeld = surface => surface.wasInert !== null;
+
+const isHistoryKey = event =>
+    (event.ctrlKey || event.metaKey) && !event.altKey && ['z', 'y'].includes(event.key.toLowerCase());
+
+// Whether a key pressed there could change what is in the surface's editor: anywhere in it, or nowhere at all.
+function reaches(surface, target) {
+    const editor = surface.element.closest('.doc-editor') ?? surface.element;
+    return target === document.body || target === document.documentElement || editor.contains(target);
+}
+
+// Only a surface that holds a generation, having been drawn in full, can be typed into. One that is disabled is not
+// contenteditable; one that is only to be left alone for a while, as during a rearrangement or a change of view, is
+// held.
 function applyState(surface) {
     const { element } = surface;
     const drawn = surface.generation !== null;
-    const editable = isEditable(surface);
-    element.contentEditable = editable ? 'true' : 'false';
-    element.setAttribute('aria-disabled', editable ? 'false' : 'true');
+    const enabled = drawn && (!surface.disabled || surface.briefly);
+    element.contentEditable = enabled ? 'true' : 'false';
+    hold(surface, enabled && (surface.briefly || isFrozen(element)));
+    element.setAttribute('aria-disabled', isEditable(surface) ? 'false' : 'true');
     if (drawn) {
         element.setAttribute('data-rt-ready', 'true');
     } else {
@@ -313,6 +361,9 @@ export function attach(element, dotNetRef, options) {
         // Of the content shown. Null until it has been drawn in full.
         generation: null,
         disabled: false,
+        // Disabled only until a change of view is made or refused.
+        briefly: false,
+        wasInert: null,
         listeners: new AbortController(),
         reader: createReader(element, inline),
     };
@@ -394,8 +445,20 @@ export function attach(element, dotNetRef, options) {
             });
         }
     });
+    // Firefox undoes into a held surface from the keyboard all the same, with the focus elsewhere or nowhere. And some
+    // builds of WebKit take Backspace outside a field to mean the page before, which is where the focus is left when it
+    // is withdrawn: the author, still typing, would leave the page.
+    on(document, 'keydown', event => {
+        const nowhere = event.target === document.body || event.target === document.documentElement;
+        if (isHeld(surface) && ((isHistoryKey(event) && reaches(surface, event.target))
+            || (event.key === 'Backspace' && nowhere))) {
+            event.preventDefault();
+        }
+    }, true);
     on(element, 'beforeinput', event => {
-        if (isEditable(surface)) {
+        if (isHeld(surface) && event.inputType.startsWith('history')) {
+            event.preventDefault();
+        } else if (isEditable(surface)) {
             handleBeforeInput(element, inline, event);
         }
     });
@@ -451,21 +514,24 @@ export function attach(element, dotNetRef, options) {
 
 // With force, redraws the surface from keyedNodes ([{ key, node }]) of the given generation, unless it already
 // has that generation: .NET sends a redraw again when it cannot tell that it arrived, and by then the author may
-// have typed. Without force, the content is left alone and only disabled is applied. Returns the generation the
-// surface then has, which is null if there is no surface or none has been drawn. Throws if drawing fails.
+// have typed. Without force, the content is left alone and only disabled is applied. briefly says that disabled is
+// only for the time a change of view takes. Returns the generation the surface then has, which is null if there is no
+// surface or none has been drawn, or if it is disabled and what it holds may not have gone. Throws if drawing fails.
 // data-rt-ready is set while the surface has drawn content.
-export function sync(element, keyedNodes, disabled, force, generation) {
+export function sync(element, keyedNodes, disabled, force, generation, briefly = false) {
     const surface = element && surfaces.get(element);
     if (!surface) {
         return null;
     }
 
-    if (disabled && !force) {
-        // Before it stops taking input. A change of view starts this way, and the surface goes with the view.
+    if (disabled) {
+        // Before it stops taking input. A change of view starts this way, and the surface goes with the view. Also
+        // when a redraw comes with it: it may be one the surface drew long ago, and has been typed in since.
         settle(surface);
     }
 
     surface.disabled = disabled;
+    surface.briefly = disabled && briefly;
     if (force && generation !== surface.generation) {
         if (surface.composing) {
             // Rewriting the element now would break the composition.
@@ -478,7 +544,7 @@ export function sync(element, keyedNodes, disabled, force, generation) {
     applyState(surface);
     // While the connection still shows as down, what was just sent again has not gone. So .NET is not answered that
     // the surface is read-only, and asks again.
-    return disabled && !force && isReconnecting() ? null : surface.generation;
+    return disabled && isReconnecting() ? null : surface.generation;
 }
 
 // Runs a writing command where the surface's selection is, or last was: bold, italic, code, link (with an address,

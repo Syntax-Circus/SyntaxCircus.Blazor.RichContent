@@ -227,7 +227,7 @@ export function sync(element, text, disabled, force, generation) {
         return null;
     }
 
-    if (disabled && !force) {
+    if (disabled) {
         settle(card);
     }
 
@@ -242,7 +242,7 @@ export function sync(element, text, disabled, force, generation) {
 
     applyState(card);
     // See surface.js.
-    return disabled && !force && isReconnecting() ? null : card.generation;
+    return disabled && isReconnecting() ? null : card.generation;
 }
 
 export function focus(element) {
