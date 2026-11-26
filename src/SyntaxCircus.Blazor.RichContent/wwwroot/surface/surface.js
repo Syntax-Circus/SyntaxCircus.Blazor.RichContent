@@ -289,18 +289,14 @@ function settle(surface) {
     }
 }
 
-// Safe to call again for the same element, as .NET does when it cannot tell that an earlier call arrived: a surface
-// that has been drawn is kept, with whatever has been typed in it since.
+// Safe to call again for the same element, as .NET does when it cannot tell that an earlier call arrived: the
+// surface it has is kept, with whatever has been typed in it.
 export function attach(element, dotNetRef, options) {
     releaseRemoved();
     const attached = surfaces.get(element);
     if (attached) {
-        if (attached.generation !== null) {
-            attached.dotNetRef = dotNetRef;
-            return;
-        }
-
-        release(attached);
+        attached.dotNetRef = dotNetRef;
+        return;
     }
 
     const inline = options?.profile === 'inline';

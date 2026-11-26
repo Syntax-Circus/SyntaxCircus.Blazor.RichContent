@@ -31,6 +31,7 @@ public partial class ContentDocumentEditor : IDisposable
     private bool _switchRefused;
     private bool _loadFailed;
     private bool _disposed;
+    private readonly CancellationTokenSource _disposal = new();
 
     private IReadOnlyList<RichContentError> _lastPublished = [];
     private bool _errorsPublished;
@@ -50,6 +51,8 @@ public partial class ContentDocumentEditor : IDisposable
     public void Dispose()
     {
         _disposed = true;
+        _disposal.Cancel();
+        _disposal.Dispose();
         _session.RejectionsChanged -= RejectionsChanged;
         _session.ScriptFailed -= ScriptFailed;
         _session.ReadOnlyChanged -= ReadOnlyChanged;
@@ -125,15 +128,47 @@ public partial class ContentDocumentEditor : IDisposable
         builder.CloseComponent();
     };
 
-    private Task ViewDrawnAsync(int number)
+    private async Task ViewDrawnAsync(int number)
     {
         if (number != _switches)
         {
-            return Task.CompletedTask;
+            return;
         }
 
         _drawn = true;
-        return CompleteSwitchAsync();
+        var completed = CompleteSwitchAsync();
+        if (IsWaitingFor(number))
+        {
+            _ = PromptUntilSwitchedAsync(number);
+        }
+
+        await completed;
+    }
+
+    private bool IsWaitingFor(int number) => !_disposed && number == _switches && _pending is not null;
+
+    // The browser has just answered, so it is there. A part it has not confirmed lost its call, with a connection that
+    // has since come back. Its own tries grow far apart; here the author is waiting, with the editor read-only.
+    private async Task PromptUntilSwitchedAsync(int number)
+    {
+        try
+        {
+            var longest = Options.ScriptRetryDelay;
+            var delay = longest / 8;
+            while (IsWaitingFor(number))
+            {
+                _session.PromptUnconfirmed();
+                await Task.Delay(delay, _disposal.Token);
+                delay = delay * 2 < longest ? delay * 2 : longest;
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception exception)
+        {
+            await DispatchExceptionAsync(exception);
+        }
     }
 
     private void ReadOnlyChanged()

@@ -14,8 +14,8 @@ namespace SyntaxCircus.Blazor.RichContent.Editing.Surfaces;
 /// </summary>
 public abstract partial class ScriptEditorBase : ComponentBase, IAsyncDisposable
 {
-    // How often a redraw whose script threw is tried again by itself. Whatever else got in its way is retried for as
-    // long as it lasts.
+    // How often the watch tries again while the script itself throws. Whatever else gets in the way is retried for as
+    // long as it lasts. Other parameters, and the author, can always cause another try.
     private const int ScriptAttempts = 3;
 
     private readonly ChunkAssembler _assembler = new();
@@ -43,7 +43,6 @@ public abstract partial class ScriptEditorBase : ComponentBase, IAsyncDisposable
 
     // Runs while the browser does not have what it should. Cancelled once it has.
     private CancellationTokenSource? _watch;
-    private int _scriptFailures;
 
     private protected ScriptEditorBase()
     {
@@ -137,7 +136,7 @@ public abstract partial class ScriptEditorBase : ComponentBase, IAsyncDisposable
         if (redraw)
         {
             // New content gets its own tries.
-            _scriptFailures = 0;
+            StopWatching();
         }
 
         if (redraw || RedrawIsUnconfirmed || Disabled != _syncedDisabled)

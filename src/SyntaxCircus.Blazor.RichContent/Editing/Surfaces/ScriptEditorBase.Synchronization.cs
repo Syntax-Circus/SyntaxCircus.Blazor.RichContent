@@ -30,7 +30,6 @@ public abstract partial class ScriptEditorBase
         }
         catch (JSException exception)
         {
-            _scriptFailures++;
             _scriptBroken = true;
             Logger.LogError(exception, "A call to the writing editor's script failed.");
             Session?.ReportReadOnly();
@@ -96,6 +95,7 @@ public abstract partial class ScriptEditorBase
         {
             var delay = Options.ScriptRetryDelay;
             var longest = delay * 8;
+            var failing = 0;
             while (true)
             {
                 await Task.Delay(delay, cancellation);
@@ -111,7 +111,7 @@ public abstract partial class ScriptEditorBase
                     StateHasChanged();
                 }
 
-                if (_scriptFailures < ScriptAttempts)
+                if (!_scriptBroken || failing++ < ScriptAttempts)
                 {
                     // Not awaited: a call that never answers must not stop the next try.
                     _ = RetryAsync();
@@ -144,10 +144,21 @@ public abstract partial class ScriptEditorBase
         }
     }
 
-    // Tries again at once, as the author asked.
+    // Prompts a try at once, from outside: see ContentDocumentEditor's switch.
+    internal void Nudge()
+    {
+        if (Behind)
+        {
+            _ = RetryAsync();
+        }
+    }
+
+    // Tries again at once, as the author asked, and watches afresh.
     private protected Task TryAgainAsync()
     {
-        _scriptFailures = 0;
+        _watch?.Cancel();
+        _watch?.Dispose();
+        _watch = null;
         var tried = Behind ? RetryAsync() : Task.CompletedTask;
         Watch();
         return tried;
@@ -166,7 +177,6 @@ public abstract partial class ScriptEditorBase
         _watch?.Cancel();
         _watch?.Dispose();
         _watch = null;
-        _scriptFailures = 0;
         if (Stalled && !IsDisposed)
         {
             Stalled = false;

@@ -426,6 +426,27 @@ public sealed class EditorModeTests : IDisposable
     }
 
     [Fact]
+    public void TriesCausedByNewParameters_DoNotUseUpTheTimersOwn()
+    {
+        SetUpScript();
+        RetryAfter(TimeSpan.FromMilliseconds(200));
+        var editor = Render(OneBlock(Paragraph("first")));
+        SyncOf(2).SetException(new JSException("cannot draw"));
+        editor.Render(parameters => parameters.Add(e => e.Document, OneBlock(Paragraph("from the host"))));
+        // Each of these sends the redraw again, and it fails again.
+        for (var i = 0; i < 6; i++)
+        {
+            editor.Render(parameters => parameters.Add(e => e.Disabled, i % 2 == 0));
+        }
+
+        editor.WaitForAssertion(() => editor.Find(".rt-surface-stalled"), TimeSpan.FromSeconds(10));
+        SyncOf(2).SetResult(2);
+
+        // Nothing else happens.
+        editor.WaitForAssertion(() => editor.FindAll(".rt-surface-stalled").ShouldBeEmpty(), TimeSpan.FromSeconds(10));
+    }
+
+    [Fact]
     public void AFirstDrawThatIsCancelled_AndThenThrows_FallsBackToBlocks()
     {
         SetUpScript();

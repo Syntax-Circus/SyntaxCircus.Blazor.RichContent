@@ -36,6 +36,15 @@ internal sealed class WritingSession
     /// </summary>
     public bool AllReadOnly => _parts.TrueForAll(part => part.IsConfirmedReadOnly);
 
+    /// <summary>Has each part that has not confirmed it is read-only try again now.</summary>
+    public void PromptUnconfirmed()
+    {
+        foreach (var part in _parts.Where(part => !part.IsConfirmedReadOnly).ToArray())
+        {
+            part.Nudge();
+        }
+    }
+
     /// <summary>Raised when <see cref="AllReadOnly"/> may have become true.</summary>
     public event Action? ReadOnlyChanged;
 

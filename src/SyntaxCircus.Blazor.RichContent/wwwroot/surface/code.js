@@ -139,17 +139,13 @@ function settle(card) {
     }
 }
 
-// Safe to call again for the same element: a card that has been filled is kept, with whatever has been typed since.
+// Safe to call again for the same element: the card it has is kept, with whatever has been typed in it.
 export function attach(element, dotNetRef) {
     releaseRemoved();
     const attached = cards.get(element);
     if (attached) {
-        if (attached.generation !== null) {
-            attached.dotNetRef = dotNetRef;
-            return;
-        }
-
-        release(attached);
+        attached.dotNetRef = dotNetRef;
+        return;
     }
 
     const card = {
