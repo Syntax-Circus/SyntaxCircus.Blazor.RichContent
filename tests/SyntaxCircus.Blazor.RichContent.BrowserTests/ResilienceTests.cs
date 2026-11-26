@@ -820,6 +820,53 @@ public class ResilienceTests(SampleHost host) : CardTest(host)
         (await ChangeCountAsync(Page)).ShouldBe(0);
     }
 
+    [Theory]
+    // A block splits the text block, so the cards after the cursor would be drawn again in a block of their own.
+    [InlineData("code")]
+    [InlineData("table")]
+    public async Task ABlockInsertedAboveACardWithUnsavedText_IsRefused_AndTheTextStays(string kind)
+    {
+        await OpenFixtureAsync("everything", "write");
+        await ShouldBeWritingAsync();
+        await CodeAsync("prose");
+        var field = kind == "code"
+            ? Card("prose", "code").First.Locator("textarea[data-rt-code]")
+            : Card("prose", "table").Locator("[data-rt-surface]").First;
+        // More than one edit may carry, so it can be nowhere but on screen.
+        await field.EvaluateAsync(
+            """
+            element => {
+                const text = 'x'.repeat(2_200_000);
+                if (element.matches('textarea')) {
+                    element.value = text;
+                } else {
+                    element.textContent = text;
+                }
+
+                element.dispatchEvent(new InputEvent('input', { bubbles: true }));
+            }
+            """);
+        await Expect(Reported("surface-unconvertible")).ToHaveCountAsync(1, new() { Timeout = 60_000 });
+        const string Length = "element => (element.value ?? element.textContent).length";
+
+        await PlaceCaretAsync(Surface("prose").Locator(":scope > h2"));
+        await InsertAsync("Call to action");
+
+        await Expect(Page.Locator("[data-block-id=prose] .rt-refused")).ToContainTextAsync("could not be saved");
+        (await ChangeCountAsync(Page)).ShouldBe(0);
+        (await field.EvaluateAsync<int>(Length)).ShouldBe(2_200_000);
+        await Expect(Reported("surface-unconvertible")).ToHaveCountAsync(1);
+        await Expect(Page.Locator("[data-block-kind=cta]")).ToHaveCountAsync(1);
+
+        // What redraws no card is still done, and the card keeps what it shows.
+        await PlaceCaretAsync(Surface("prose").Locator(":scope > h2"));
+        await InsertAsync("Image");
+        await Expect(Page.Locator("[data-block-id=prose] [data-rt-card=image]")).ToHaveCountAsync(3);
+        (await field.EvaluateAsync<int>(Length)).ShouldBe(2_200_000);
+        await Expect(Reported("surface-unconvertible")).ToHaveCountAsync(1);
+        await Expect(Page.Locator("[data-block-id=prose] .rt-refused")).ToHaveCountAsync(0);
+    }
+
     // ---- Removal ----
 
     [Theory]

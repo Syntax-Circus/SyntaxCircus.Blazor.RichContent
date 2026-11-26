@@ -201,14 +201,14 @@ public partial class WritingBlock
         StateHasChanged();
     }
 
-    // Moves nodes about on the author's behalf. False, changing nothing, if that would redraw or drop a surface which
-    // shows something that could not be converted, and so exists only on screen. The reason is then shown at the part
-    // that asked. A card the author removes goes with whatever it shows: they were asked first.
-    private bool TryRearrange(ImmutableArray<RichTextNode> nodes, Part asked)
+    // Moves nodes about on the author's behalf. False, changing nothing, if that would redraw or drop a surface or card
+    // which shows something that could not be converted, and so exists only on screen. The reason is then shown at the
+    // part that asked. The card the author removes goes with whatever it shows: they were asked first.
+    private bool TryRearrange(ImmutableArray<RichTextNode> nodes, Part asked, Part? removed = null)
     {
         var plan = Plan(nodes, replaced: false);
         var kept = plan.Select(entry => entry.Part).ToHashSet();
-        if (_parts.Exists(part => !kept.Contains(part) && part.Surface is { HasRejectedEdit: true }))
+        if (_parts.Exists(part => !kept.Contains(part) && !ReferenceEquals(part, removed) && ShowsUnsaved(part)))
         {
             _refusal = (asked, WriteModeMessages.RearrangeRefused);
             return false;
@@ -293,7 +293,7 @@ public partial class WritingBlock
     private Task RemoveCard(Part part)
     {
         var start = StartOf(part);
-        return !Disabled && start >= 0 && TryRearrange(_nodes.RemoveAt(start), part)
+        return !Disabled && start >= 0 && TryRearrange(_nodes.RemoveAt(start), part, removed: part)
             ? NodesChanged.InvokeAsync(_nodes)
             : Task.CompletedTask;
     }
