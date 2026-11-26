@@ -15,6 +15,11 @@ const surfaces = new Map();
 let reported = null;
 let styled = false;
 
+// The surface's own font, kept on it for the one thing that cannot inherit it. Firefox, when code is switched off at its
+// end, writes the "plain" face inside the code, where all there is to inherit is the code font, and what is stored as
+// plain text would look like code.
+const SURFACE_FONT = '--_rt-font';
+
 // The browser's commands decide what is bold, italic or code from how text looks, not from what the elements are. A
 // heading, a quote or a link that a page showed bold or italic would count as formatted, and the command would take
 // the formatting away instead of adding it; a bold element shown unbold would be wrapped again; and a font whose
@@ -33,7 +38,19 @@ const SURFACE_STYLES = `
         font-family: "rt-code", monospace !important; background: rgba(127, 127, 127, 0.18);
     }
     [data-rt-surface] font[face="rt-plain"] { font-family: inherit !important; }
+    [data-rt-surface] :is(code, font[face^="rt-code"], font[face^='"rt-code"'], [style*="rt-code"]) font[face="rt-plain"] {
+        font-family: var(${SURFACE_FONT}, sans-serif) !important;
+    }
 `;
+
+// Taken anew each time the surface gets the focus, which anything that nests the faces needs, so that a host's change
+// of font is followed. Set only when it differs, since setting it restyles everything in the surface.
+function keepFont(element) {
+    const font = getComputedStyle(element).fontFamily;
+    if (element.style.getPropertyValue(SURFACE_FONT) !== font) {
+        element.style.setProperty(SURFACE_FONT, font);
+    }
+}
 
 // Made through the object model, which no content security policy refuses.
 function addStyles() {
@@ -418,6 +435,7 @@ export function attach(element, dotNetRef, options) {
         }
     });
     on(element, 'focusin', () => {
+        keepFont(element);
         entered(surface);
         // Otherwise some browsers make a <div> on Enter.
         document.execCommand('defaultParagraphSeparator', false, 'p');

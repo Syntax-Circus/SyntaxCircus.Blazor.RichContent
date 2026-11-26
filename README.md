@@ -327,7 +327,10 @@ of `code` or `font[face="rt-plain"]` elements.** The browser's formatting comman
 from how text looks, so the editor pins these (headings, for instance, show at normal weight while edited). While
 editing, inline code is shown as `font[face="rt-code"]`. If you change the code font there (for `code` and
 `font[face="rt-code"]`), **keep `"rt-code"` first in the font family list**, as in
-`font-family: "rt-code", ui-monospace, monospace`; the editor recognises code by it.
+`font-family: "rt-code", ui-monospace, monospace`; the editor recognises code by it. Text taken out of code while
+editing can be left inside the code element (Firefox does this). The editor then shows it in the surface's own font,
+as it was when the surface last got the focus. Until the text is redrawn, a separate font that you set only for
+headings, links or quotes does not apply to it.
 
 ### Other effects on the page
 

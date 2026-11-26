@@ -676,6 +676,164 @@ public class SurfaceCommandTests(SampleHost host) : SurfaceTest(host)
         (await ErrorCodesAsync(Page)).ShouldBeEmpty();
     }
 
+    // Keys of a flow: "^e" is Ctrl/Cmd+E, "{Enter}" a key, and anything else is typed.
+    private async Task PlayAsync(params string[] steps)
+    {
+        foreach (var step in steps)
+        {
+            if (step.StartsWith('^'))
+            {
+                await Page.Keyboard.PressAsync("ControlOrMeta+" + step[1..]);
+            }
+            else if (step.StartsWith('{'))
+            {
+                await Page.Keyboard.PressAsync(step[1..^1]);
+            }
+            else
+            {
+                await Page.Keyboard.TypeAsync(step);
+            }
+        }
+    }
+
+    // Where Firefox writes the "plain" face inside the code, rather than splitting the code around what is typed.
+    [Theory]
+    // Code switched off at the end of code, then more typing.
+    [InlineData("off-at-end", new[] { "ab", "^e", "cd", "^e", "X" })]
+    // Bold within code.
+    [InlineData("bold-inside", new[] { "ab", "^e", "cd", "^b", "ef", "^b", "gh", "^e", "X" })]
+    [InlineData("bold-then-off", new[] { "ab", "^e", "^b", "cd", "^e", "X", "^b", "Y" })]
+    // Two lines of code joined, with plain text typed after code is switched off.
+    [InlineData("joined-lines", new[] { "^e", "one", "{Enter}", "two", "{Home}", "{Backspace}", "{End}", "^e", "X" })]
+    [InlineData("joined-then-off", new[] { "ab", "^e", "cd", "{Enter}", "ef", "^e", "gh", "{Home}", "{Backspace}", "{End}", "^e", "ij", "^e", "X" })]
+    // Code switched on again from within what was typed after it.
+    [InlineData("on-again", new[] { "ab", "^e", "cd", "^e", "X", "^e", "ef", "^e", "Y" })]
+    public async Task TypingAfterInlineCode_IsStoredAsShown(string flow, string[] steps)
+    {
+        await OpenEmptyAsync();
+
+        await PlayAsync(steps);
+
+        await ShouldBeStoredAsShownAsync();
+        (await Start.EvaluateAsync<string>(ShownCodeScript)).ShouldContain("«", Case.Sensitive, flow);
+        // And the toolbar agrees, with the cursor in what was typed last.
+        await Start.FocusAsync();
+        await Page.Keyboard.PressAsync("End");
+        var endsInCode = (await Start.EvaluateAsync<string>(ShownCodeScript)).EndsWith('»');
+        await Expect(Tool("Inline code")).ToHaveAttributeAsync("aria-pressed", endsInCode ? "true" : "false");
+    }
+
+    // A host with fonts of its own for the editor, its headings, links, quotes and table cells.
+    private async Task UseHostFontsAsync() => await Page.EvaluateAsync("""
+        () => {
+            const sheet = new CSSStyleSheet();
+            sheet.replaceSync(`
+                .doc-editor { font-family: Georgia, serif; }
+                [data-rt-surface] h2 { font-family: "Courier New", serif; }
+                [data-rt-surface] a { font-family: Verdana, serif; }
+                [data-rt-surface] blockquote { font-family: Tahoma, serif; }
+                [data-rt-surface] p.other { font-family: "Trebuchet MS", serif; }
+            `);
+            document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
+        }
+        """);
+
+    // For each marked element: its font, its parent's and its surface's, as computed.
+    private const string FontsScript = """
+        surface => [...surface.querySelectorAll('[id^=probe]')].map(element => [
+            element.id,
+            getComputedStyle(element).fontFamily,
+            getComputedStyle(element.parentElement).fontFamily,
+            getComputedStyle(surface).fontFamily,
+        ])
+        """;
+
+    private async Task ShouldReadAsPlainAsync(ILocator surface, string id)
+    {
+        var probe = surface.Locator("#" + id);
+        await PlaceCaretAsync(probe, 1);
+        await Expect(Tool("Inline code")).ToHaveAttributeAsync("aria-pressed", "false");
+        await Expect(Tool("Bold")).ToBeEnabledAsync();
+        await SelectAsync(probe, 0, 2);
+        await Expect(Tool("Inline code")).ToHaveAttributeAsync("aria-pressed", "false");
+    }
+
+    // The face that takes text out of code looks like what is around it where nothing around it is code, and like the
+    // surface's own text where it is inside code, so that it never looks like code.
+    [Fact]
+    public async Task TheFaceThatTakesTextOutOfCode_NeverLooksLikeCode_AndFollowsTheHostsFonts()
+    {
+        const string Plain = "<font face=\"rt-plain\" id=";
+        await OpenEmptyAsync();
+        await UseHostFontsAsync();
+        await Start.EvaluateAsync(
+            "(surface, markup) => { surface.innerHTML = markup; surface.dispatchEvent(new InputEvent('input', { bubbles: true })); }",
+            $"<p>a {Plain}\"probe-p\">in a paragraph</font></p>"
+            + $"<p class=\"other\">b {Plain}\"probe-other\">in another font</font></p>"
+            + $"<h2>c {Plain}\"probe-h\">in a heading</font></h2>"
+            + $"<p><a href=\"/x\">d {Plain}\"probe-a\">in a link</font></a></p>"
+            + $"<blockquote><p>e {Plain}\"probe-q\">in a quote</font></p></blockquote>"
+            + $"<p><font face=\"rt-code\">f {Plain}\"probe-in-code\">in code</font></font></p>"
+            + $"<p><font face=\"rt-code, monospace\">g {Plain}\"probe-in-restyled\">in restyled code</font></font></p>"
+            + $"<p><span style=\"font-family: rt-code, monospace\"><b>h {Plain}\"probe-in-span\">in a span</font></b></span></p>"
+            + $"<h2><font face=\"rt-code\">i {Plain}\"probe-in-heading-code\">in code in a heading</font></font></h2>");
+        // The surface's font is taken as it gets the focus, which it had before the fonts changed here.
+        await Start.BlurAsync();
+        await Start.FocusAsync();
+
+        var fonts = await Start.EvaluateAsync<string[][]>(FontsScript);
+
+        fonts.Length.ShouldBe(9);
+        foreach (var font in fonts)
+        {
+            var (id, own, parent, surface) = (font[0], font[1], font[2], font[3]);
+            surface.ShouldStartWith("Georgia", Case.Sensitive, "the surface takes the host's font");
+            own.ShouldBe(id.StartsWith("probe-in-", StringComparison.Ordinal) ? surface : parent, id);
+        }
+
+        await ShouldBeStoredAsShownAsync();
+        foreach (var font in fonts)
+        {
+            await ShouldReadAsPlainAsync(Start, font[0]);
+        }
+
+        // A host that changes its font: what is typed from then on is shown in the new one.
+        await Page.EvaluateAsync("() => document.querySelector('.doc-editor').style.fontFamily = 'Arial, sans-serif'");
+        await SaveAsync(Page);
+        await Start.FocusAsync();
+        (await Start.Locator("#probe-in-code").EvaluateAsync<string>("element => getComputedStyle(element).fontFamily")).ShouldStartWith("Arial");
+    }
+
+    [Fact]
+    public async Task TheFaceThatTakesTextOutOfCode_BehavesTheSameInATableCell()
+    {
+        await OpenFixtureAsync("everything", "write");
+        await UseHostFontsAsync();
+        var cell = Page.Locator("[data-block-id=prose] [data-rt-card=table] [data-rt-surface]").First;
+        await cell.EvaluateAsync("""
+            surface => {
+                surface.innerHTML = 'a <font face="rt-plain" id="probe-cell">plain</font> '
+                    + '<font face="rt-code">b <font face="rt-plain" id="probe-in-cell-code">out of code</font></font>';
+                surface.dispatchEvent(new InputEvent('input', { bubbles: true }));
+            }
+            """);
+        await cell.FocusAsync();
+
+        var fonts = await cell.EvaluateAsync<string[][]>(FontsScript);
+
+        fonts.Length.ShouldBe(2);
+        foreach (var font in fonts)
+        {
+            font[1].ShouldBe(font[3], font[0]);
+            font[1].ShouldStartWith("Georgia", Case.Sensitive, font[0]);
+        }
+
+        foreach (var font in fonts)
+        {
+            await ShouldReadAsPlainAsync(cell, font[0]);
+        }
+    }
+
     // Puts markup in the live surface, as the browser's editing might leave it, and has it sent.
     private async Task LeaveMarkupAsync(string markup)
     {
