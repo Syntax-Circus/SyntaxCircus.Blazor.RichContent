@@ -1,7 +1,12 @@
 @using SyntaxCircus.Blazor.RichContent.Editing.Writing
 @if (Document is not null)
 {
-<div class="doc-editor" role="group" aria-label="@Label">
+<div class="doc-editor" role="group" aria-label="@Label" data-rt-editor="@(Mode == RichContentEditorMode.Write)">
+<CascadingValue Value="_session" IsFixed="true">
+    @if (Mode == RichContentEditorMode.Write)
+    {
+        <WritingToolbar Disabled="Disabled" />
+    }
     @if (!HasMediaPicker)
     {
         <p class="hint">No media picker is configured, so images and galleries cannot be added.</p>
@@ -70,6 +75,7 @@
         </section>
         @Menu(index + 1, true, inserted => Update(ContentDocumentOperations.Add(Latest, index + 1, inserted)))
     }
+</CascadingValue>
 </div>
 }
 

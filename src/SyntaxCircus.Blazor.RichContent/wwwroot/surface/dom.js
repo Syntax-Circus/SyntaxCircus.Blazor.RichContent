@@ -13,6 +13,14 @@ const ORDERED = 'data-rt-ordered';
 const URL_ATTRIBUTE = 'data-rt-url';
 // On the paragraph an empty surface offers to type into. While it is empty and alone, nothing is stored for it.
 const PLACEHOLDER = 'data-rt-placeholder';
+// On a list item that stores one paragraph, shown without its <p>: how that paragraph stored its children. Browsers
+// make a mess of nesting items that hold paragraphs, so they are shown like items that do not.
+const PARAGRAPH = 'data-rt-paragraph';
+
+// Inline code is the browser's font command with this face, since no command makes <code>, and a <code> inserted as
+// markup is dropped in places, or cannot be taken away again.
+export const CODE_FACE = 'rt-code';
+export const CODE_SELECTOR = `code, font[face="${CODE_FACE}"]`;
 
 const NBSP = '\u00a0';
 const NBSP_CONTEXT = 8;
@@ -40,8 +48,8 @@ const tagOf = element => element.tagName.toUpperCase();
 // ---- Building ----
 
 // Deliberately stricter than RichContentUrl.IsSafe. It only decides whether an address may be a live href.
-function mayBeHref(url) {
-    if (url.length === 0 || url.length > 2048 || /[\s\u0000-\u001f\u007f-\u009f\\<>"']/.test(url)) {
+export function mayBeHref(url, maximumLength = 2048) {
+    if (url.length === 0 || url.length > maximumLength || /[\s\u0000-\u001f\u007f-\u009f\\<>"']/.test(url)) {
         return false;
     }
 
@@ -54,7 +62,7 @@ function tagFor(node) {
         case 'heading': return `h${[2, 3, 4].includes(node.level) ? node.level : 2}`;
         case 'strong': return 'strong';
         case 'emphasis': return 'em';
-        case 'inlineCode': return 'code';
+        case 'inlineCode': return 'font';
         case 'link': return 'a';
         case 'list': return node.ordered === true ? 'ol' : 'ul';
         case 'listItem': return 'li';
@@ -73,6 +81,7 @@ export function buildNode(node) {
 
     const element = document.createElement(tagFor(node));
     if (node.kind === 'inlineCode') {
+        element.setAttribute('face', CODE_FACE);
         element.textContent = node.text ?? '';
         return element;
     }
@@ -89,13 +98,18 @@ export function buildNode(node) {
         element.setAttribute(ORDERED, 'none');
     }
 
-    const children = node.children;
-    if (!children || children.length === 0) {
+    let { children } = node;
+    const paragraphs = node.kind === 'listItem' ? (children ?? []).filter(child => child.kind === 'paragraph') : [];
+    if (paragraphs.length === 1 && children[0] === paragraphs[0]) {
+        const own = paragraphs[0].children;
+        element.setAttribute(PARAGRAPH, !own ? 'absent' : own.length === 0 ? 'empty' : '');
+        children = [...(own ?? []), ...children.slice(1)];
+    } else if (!children || children.length === 0) {
         element.setAttribute(EMPTY, children ? 'empty' : 'absent');
-    } else {
-        for (const child of children) {
-            element.appendChild(buildNode(child));
-        }
+    }
+
+    for (const child of children ?? []) {
+        element.appendChild(buildNode(child));
     }
 
     if (NEEDS_FILLER.has(node.kind) && element.textContent === '' && !element.querySelector('ul,ol')) {
@@ -278,7 +292,7 @@ function merged(nodes) {
     return result;
 }
 
-function linkUrl(element) {
+export function linkUrl(element) {
     const stored = element.getAttribute(URL_ATTRIBUTE);
     const href = element.getAttribute('href');
     // An href that is not the one put there with the stored address was set since, so it is the newer one.
@@ -324,8 +338,21 @@ function readInline(run, textOf) {
             case 'EM':
                 wrap({ kind: 'emphasis' }, children());
                 return;
+            case 'FONT':
             case 'CODE': {
-                const text = children().map(plainText).join('');
+                if (tagOf(node) === 'FONT' && node.getAttribute('face') !== CODE_FACE) {
+                    break;
+                }
+
+                const content = children();
+                // The model has no link inside code. A command can put code around one, which then has to hold the
+                // code instead, or its address would be lost.
+                if (!withinLink && node.querySelector('a')) {
+                    out.push(...content.map(asCode));
+                    return;
+                }
+
+                const text = content.map(plainText).join('');
                 if (text !== '') {
                     out.push({ kind: 'inlineCode', text });
                 }
@@ -352,19 +379,39 @@ function readInline(run, textOf) {
 
 const plainText = node => node.text ?? (node.children ?? []).map(plainText).join('');
 
+// The node with each run of text in it made code, keeping the formatting and links around the runs.
+const asCode = node => {
+    if (node.kind === 'text') {
+        return { kind: 'inlineCode', text: node.text };
+    }
+
+    return node.children ? { ...node, children: node.children.map(asCode) } : node;
+};
+
 // Only the white space HTML collapses, so a stored U+00A0 counts as content.
 const isBlank = inline => inline.every(node => node.kind === 'text' && /^[ \t\r\n\f]*$/.test(node.text));
 
 // ---- Reading blocks ----
 
 // Splits DOM nodes into runs of inline content and the model's block elements, unwrapping every other element.
-function split(domNodes) {
+// With breaks, a <br> among the nodes themselves ends a run: directly in the surface or in a quote there is no line
+// for it to break, and it is what separates the lines a browser leaves when it ends a list or a quote.
+function split(domNodes, breaks = false) {
     const parts = [];
     let run = [];
     const flush = () => {
         if (run.length > 0) {
             parts.push({ run });
             run = [];
+        }
+    };
+    const visitAll = (nodes, ending) => {
+        for (const node of nodes) {
+            if (ending && node.nodeName === 'BR') {
+                flush();
+            } else {
+                visit(node);
+            }
         }
     };
     const visit = node => {
@@ -383,7 +430,8 @@ function split(domNodes) {
             parts.push({ element: node, tag });
         } else if (OTHER_BLOCKS.has(tag)) {
             flush();
-            node.childNodes.forEach(visit);
+            // A <div> is the browser's, and a <br> directly in one separates lines as it does in the surface itself.
+            visitAll(node.childNodes, tag === 'DIV');
             flush();
         } else if (node.querySelector(BLOCK_SELECTOR)) {
             node.childNodes.forEach(visit);
@@ -391,7 +439,7 @@ function split(domNodes) {
             run.push(node);
         }
     };
-    domNodes.forEach(visit);
+    visitAll(domNodes, breaks);
     flush();
     return parts;
 }
@@ -431,7 +479,7 @@ function readBlock(element, tag, context, textOf) {
     }
 
     if (tag === 'BLOCKQUOTE') {
-        let children = readSequence(split(element.childNodes), 'quote', textOf);
+        let children = readSequence(split(element.childNodes, true), 'quote', textOf);
         if (context === 'quote') {
             return children;
         }
@@ -485,10 +533,15 @@ function readListItems(domNodes, element, textOf) {
             return;
         }
 
-        const paragraphs = own.length > 1 || own.some(unit => unit.paragraph);
+        // An item shown without its paragraph gets it back.
+        const wrapped = items.length === 0 && element?.hasAttribute(PARAGRAPH);
+        const paragraphs = wrapped || own.length > 1 || own.some(unit => unit.paragraph);
         const children = paragraphs
             ? own.map(unit => unit.paragraph ?? { kind: 'paragraph', children: unit.inline })
             : own[0]?.inline ?? [];
+        if (wrapped && children.length === 0) {
+            children.push(emptyParagraph(element));
+        }
         items.push({ kind: 'listItem', children: [...children, ...lists] });
         own = [];
         lists = [];
@@ -510,7 +563,20 @@ function readListItems(domNodes, element, textOf) {
     }
 
     finish();
-    return items.length > 0 || !element ? items : [withChildren({ kind: 'listItem' }, emptyChildren(element))];
+    if (items.length > 0 || !element) {
+        return items;
+    }
+
+    return [element.hasAttribute(PARAGRAPH)
+        ? { kind: 'listItem', children: [emptyParagraph(element)] }
+        : withChildren({ kind: 'listItem' }, emptyChildren(element))];
+}
+
+// The paragraph of an item shown without it, with nothing left in it.
+function emptyParagraph(element) {
+    const stored = element.getAttribute(PARAGRAPH);
+    const children = stored === 'absent' ? undefined : stored === 'empty' ? [] : [{ kind: 'text', text: '' }];
+    return withChildren({ kind: 'paragraph' }, children);
 }
 
 const isEmptyRun = node => node.kind === 'text' && node.text === '';
@@ -617,7 +683,7 @@ export function createReader(root, inline) {
         let loose = [];
         const flush = () => {
             if (loose.length > 0) {
-                readSequence(split(loose), 'top', textOf)
+                readSequence(split(loose, true), 'top', textOf)
                     .forEach((node, index) => result.push(entry(keyFor(loose[0], index), node)));
                 loose = [];
             }

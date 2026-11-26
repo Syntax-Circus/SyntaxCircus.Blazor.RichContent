@@ -3,6 +3,7 @@ using System.Text.Json;
 using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.Logging;
 using Microsoft.JSInterop;
+using SyntaxCircus.Blazor.RichContent.Editing.Writing;
 using SyntaxCircus.RichContent;
 
 namespace SyntaxCircus.Blazor.RichContent.Editing.Surfaces;
@@ -37,6 +38,9 @@ public partial class RichTextSurface
     [Inject] private IJSRuntime JS { get; set; } = default!;
 
     [Inject] private ILogger<RichTextSurface> Logger { get; set; } = default!;
+
+    // Absent for a surface used on its own, which has no toolbar to keep informed.
+    [CascadingParameter] private WritingSession? Session { get; set; }
 
     [Parameter] public ImmutableArray<RichTextNode> Nodes { get; set; } = [];
 
@@ -304,6 +308,44 @@ public partial class RichTextSurface
         return Task.CompletedTask;
     }
 
+    /// <summary>
+    /// Told the formatting at the cursor when it changes, or when the cursor comes to this surface. For the script only.
+    /// </summary>
+    [JSInvokable]
+    public Task SelectionChanged(SurfaceSelection selection)
+    {
+        if (!_disposed && selection is not null)
+        {
+            Session?.Report(this, selection);
+        }
+
+        return Task.CompletedTask;
+    }
+
+    /// <summary>Told that the author asked for the link box with the keyboard. For the script only.</summary>
+    [JSInvokable]
+    public Task LinkRequested()
+    {
+        if (!_disposed)
+        {
+            Session?.RequestLink(this);
+        }
+
+        return Task.CompletedTask;
+    }
+
+    /// <summary>Runs a writing command where the cursor was last in this surface.</summary>
+    internal Task CommandAsync(string name, string argument) =>
+        _ready && !_disposed && _module is { } module
+            ? LoggingScriptErrors(async () => await module.InvokeAsync<bool>("command", _element, name, argument)).AsTask()
+            : Task.CompletedTask;
+
+    /// <summary>Gives the surface the focus again, with the cursor where it was.</summary>
+    internal Task RestoreAsync() =>
+        _ready && !_disposed && _module is { } module
+            ? LoggingScriptErrors(() => module.InvokeVoidAsync("restore", _element)).AsTask()
+            : Task.CompletedTask;
+
     private async Task<bool> DeliverAsync(ImmutableArray<RichTextNode> nodes)
     {
         try
@@ -339,6 +381,7 @@ public partial class RichTextSurface
 
         _disposed = true;
         GC.SuppressFinalize(this);
+        Session?.Forget(this);
         try
         {
             if (_module is { } module)

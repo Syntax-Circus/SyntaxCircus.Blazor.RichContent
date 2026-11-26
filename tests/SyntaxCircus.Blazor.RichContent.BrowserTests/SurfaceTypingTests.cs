@@ -267,7 +267,6 @@ public class SurfaceTypingTests(SampleHost host) : SurfaceTest(host)
 
         var original = Nodes(Original("everything"), "prose");
         await Page.Keyboard.PressAsync("Backspace");
-        await SkipWhereFirefoxLosesTextAsync(Surface("prose"), previous, TextOf(original[previous]) + TextOf(original[node]));
 
         var joined = AssertOnlyNodesReplaced(Original("everything"), await SaveAsync(Page), "prose", previous, 2, 1).Single();
         TextOf(joined).Replace(Nbsp, " ").ShouldBe(TextOf(original[previous]) + TextOf(original[node]));
@@ -290,7 +289,6 @@ public class SurfaceTypingTests(SampleHost host) : SurfaceTest(host)
             """);
 
         await Page.Keyboard.PressAsync("Delete");
-        await SkipWhereFirefoxLosesTextAsync(Surface("prose"), 0, "A plain with code");
 
         var remaining = AssertOnlyNodesReplaced(Original("everything"), await SaveAsync(Page), "prose", 0, 3, 1).Single();
         TextOf(remaining).Replace(Nbsp, " ").ShouldBe("A plain with code");
@@ -718,33 +716,6 @@ public class SurfaceTypingTests(SampleHost host) : SurfaceTest(host)
         (await SaveAsync(Page)).ShouldBe(Serialized(Fixtures.Replaced(Fixtures.Get("everything")!)));
         (await ChangeCountAsync(Page)).ShouldBe(0);
         (await Page.EvaluateAsync<bool>("() => window.answers.every(a => a.answer === true)")).ShouldBeTrue();
-    }
-
-    // Firefox's own editing (seen in 159, in a bare contenteditable with no script) loses text when it joins two
-    // blocks of different kinds, such as a heading and a paragraph: what follows the second block's first inline
-    // element is deleted. Joins of two blocks of one kind are not affected. What the surface can promise there is
-    // checked first: the document is what is on screen, and undoing brings the text back to both. Does nothing when
-    // the element at the index holds the expected text, as it does everywhere else.
-    private async Task SkipWhereFirefoxLosesTextAsync(ILocator surface, int index, string expected)
-    {
-        var kept = (await surface.Locator(":scope > *").Nth(index).TextContentAsync())!.Replace(Nbsp, " ") == expected;
-        if (kept || Host.Browser.BrowserType.Name != "firefox")
-        {
-            return;
-        }
-
-        // The deleted text is missing from the screen and the document alike.
-        var onScreen = await surface.EvaluateAsync<string[]>("surface => [...surface.children].map(e => e.textContent)");
-        Nodes(await SaveAsync(Page), "prose").Take(onScreen.Length).Select(TextOf).ShouldBe(onScreen);
-        await surface.FocusAsync();
-        await Page.EvaluateAsync("() => document.execCommand('undo')");
-        var undone = await SaveAsync(Page);
-        CompactAll(Nodes(undone, "prose").Select(node => (JsonNode?)JsonValue.Create(TextOf(node))))
-            .ShouldBe(CompactAll(Nodes(Original("everything"), "prose").Select(node => (JsonNode?)JsonValue.Create(TextOf(node)))));
-        (await surface.EvaluateAsync<int>("surface => surface.textContent.length"))
-            .ShouldBeGreaterThan(onScreen.Sum(text => text.Length));
-
-        Assert.Skip("Firefox deletes text when its own editing joins blocks of different kinds; undo restores it.");
     }
 
     // Appends paragraphs to the first surface, as a paste would, and raises one input event for all of them. When

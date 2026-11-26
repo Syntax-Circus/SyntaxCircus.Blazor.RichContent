@@ -1,5 +1,6 @@
 ﻿using System.Collections.Immutable;
 using Microsoft.AspNetCore.Components;
+using SyntaxCircus.Blazor.RichContent.Editing.Writing;
 using SyntaxCircus.RichContent;
 
 namespace SyntaxCircus.Blazor.RichContent.Editing;
@@ -18,6 +19,8 @@ public partial class ContentDocumentEditor
     private bool _errorsPublished;
     private ContentDocument? _lastValidated;
     private RichContentLimits? _lastValidatedLimits;
+
+    private readonly WritingSession _session = new();
 
     [Inject] private ContentBlockRegistry Registry { get; set; } = default!;
 
@@ -76,6 +79,8 @@ public partial class ContentDocumentEditor
 
     protected override async Task OnParametersSetAsync()
     {
+        _session.Limits = Limits ?? RichContentLimits.Default;
+
         if (!ReferenceEquals(Document, _parameter))
         {
             _parameter = _latest = Document;

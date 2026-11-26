@@ -2,8 +2,31 @@
 
 import { buildSurface, createReader } from './dom.js';
 import { createTransport } from './transport.js';
+import {
+    handleBeforeInput, handleKeydown, pasteText, prepareComposition, runCommand, selectionIn, selectionState,
+    surfaceFocused, wireToolbar,
+} from './commands.js';
 
 const surfaces = new Map();
+
+// The surface and state last sent to .NET, so that only a change is sent.
+let reported = null;
+let styled = false;
+
+// What the commands depend on, whatever styles the host has. A heading that looked bold would count as bold, and the
+// bold command would then take boldness away instead of adding it; inline code has no look of its own. Made through
+// the object model, which no content security policy refuses.
+function addStyles() {
+    if (styled) {
+        return;
+    }
+
+    styled = true;
+    const sheet = new CSSStyleSheet();
+    sheet.replaceSync('[data-rt-surface] :is(h2, h3, h4) { font-weight: 400; }'
+        + ' [data-rt-surface] font[face="rt-code"] { background: rgba(127, 127, 127, 0.18); }');
+    document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
+}
 
 function release(surface) {
     surface.listeners.abort();
@@ -59,6 +82,7 @@ function render(surface, keyedNodes, generation) {
     }
 
     surface.generation = generation;
+    surface.saved = null;
     applyState(surface);
 }
 
@@ -87,6 +111,71 @@ function callDotNet(dotNetRef, method, ...args) {
     return isReconnecting()
         ? Promise.reject(new Error('The connection is down.'))
         : dotNetRef.invokeMethodAsync(method, ...args);
+}
+
+const isEditable = surface => surface.generation !== null && !surface.disabled;
+
+// Tells .NET the formatting at the cursor, if it or the surface with the cursor has changed.
+function report(surface) {
+    if (!isEditable(surface) || surface.composing) {
+        return;
+    }
+
+    const state = selectionState(surface.element);
+    if (!state) {
+        return;
+    }
+
+    const json = JSON.stringify(state);
+    if (reported?.surface === surface && reported.json === json) {
+        return;
+    }
+
+    const sent = { surface, json };
+    reported = sent;
+    // While the connection is down this fails at once. It is only forgotten, so that the next change sends it.
+    callDotNet(surface.dotNetRef, 'SelectionChanged', state).catch(() => {
+        if (reported === sent) {
+            reported = null;
+        }
+    });
+}
+
+// The toolbar cannot be asked from here: it may not yet have heard of the cursor. The state is sent first, and .NET
+// takes the two in order.
+function requestLink(surface) {
+    report(surface);
+    // With the connection down there is no box to open.
+    callDotNet(surface.dotNetRef, 'LinkRequested').catch(() => {});
+}
+
+// Gives the surface the focus and the selection it last had. False if it cannot take a command.
+function activate(surface) {
+    if (!isEditable(surface) || surface.composing) {
+        return false;
+    }
+
+    const { element, saved } = surface;
+    if (document.activeElement !== element) {
+        element.focus({ preventScroll: true });
+        if (saved && element.contains(saved.startContainer) && element.contains(saved.endContainer)) {
+            getSelection().removeAllRanges();
+            getSelection().addRange(saved.cloneRange());
+        }
+    }
+
+    return selectionIn(element) !== null;
+}
+
+// What a command changes is sent as it changes, in this task.
+function run(surface, name, argument) {
+    if (!activate(surface)) {
+        return false;
+    }
+
+    const ran = runCommand(surface.element, surface.inline, name, argument);
+    report(surface);
+    return ran;
 }
 
 function compositionChanged(surface, composing) {
@@ -127,6 +216,8 @@ export function attach(element, dotNetRef, options) {
         inline,
         composing: false,
         pending: null,
+        // The selection when it was last in the surface.
+        saved: null,
         // Of the content shown. Null until it has been drawn in full.
         generation: null,
         disabled: false,
@@ -163,6 +254,10 @@ export function attach(element, dotNetRef, options) {
         }
     });
     on(element, 'compositionstart', () => {
+        if (!surface.composing && isEditable(surface)) {
+            prepareComposition(element);
+        }
+
         surface.composing = true;
         compositionChanged(surface, true);
     });
@@ -172,8 +267,44 @@ export function attach(element, dotNetRef, options) {
             endComposition(surface);
         }
     });
-    // Otherwise some browsers make a <div> on Enter.
-    on(element, 'focusin', () => document.execCommand('defaultParagraphSeparator', false, 'p'));
+    on(element, 'focusin', () => {
+        surfaceFocused(element);
+        // Otherwise some browsers make a <div> on Enter.
+        document.execCommand('defaultParagraphSeparator', false, 'p');
+    });
+    on(document, 'selectionchange', () => {
+        const range = selectionIn(element);
+        if (range) {
+            surface.saved = range.cloneRange();
+            report(surface);
+        }
+    });
+
+    on(element, 'keydown', event => {
+        if (isEditable(surface)) {
+            handleKeydown(element, inline, event, {
+                run: name => run(surface, name, ''),
+                changed: () => report(surface),
+                linkWanted: () => requestLink(surface),
+            });
+        }
+    });
+    on(element, 'beforeinput', event => {
+        if (isEditable(surface)) {
+            handleBeforeInput(element, inline, event);
+        }
+    });
+    // What the clipboard holds besides plain text never reaches the page.
+    on(element, 'paste', event => {
+        event.preventDefault();
+        if (isEditable(surface) && !surface.composing) {
+            pasteText(element, inline, event.clipboardData?.getData('text/plain') ?? '');
+            report(surface);
+        }
+    });
+    const refuse = event => event.preventDefault();
+    on(element, 'dragover', refuse);
+    on(element, 'drop', refuse);
 
     // A link in a surface is text to edit, never somewhere to go.
     const stay = event => {
@@ -188,6 +319,7 @@ export function attach(element, dotNetRef, options) {
     on(document, 'pointerdown', () => surface.transport.nudge(), true);
     on(document, 'keydown', () => surface.transport.nudge(), true);
 
+    addStyles();
     element.style.whiteSpace = 'pre-wrap';
     element.style.overflowWrap = 'break-word';
     surfaces.set(element, surface);
@@ -220,9 +352,26 @@ export function sync(element, keyedNodes, disabled, force, generation) {
     return surface.generation;
 }
 
-// Toolbar commands are not available yet. Returns whether the command ran.
-export function command() {
-    return false;
+// Runs a writing command where the surface's selection is, or last was: bold, italic, code, link (with an address,
+// or empty to remove it), style (p, h2, h3, h4), bullets, numbers or quote. Returns whether it ran. A surface that
+// is disabled, or holds no drawn content, ignores every command.
+export function command(element, name, argument = '') {
+    const surface = element && surfaces.get(element);
+    return surface ? run(surface, name, argument) : false;
+}
+
+// Gives the surface the focus again, with the selection it last had.
+export function restore(element) {
+    const surface = element && surfaces.get(element);
+    if (surface && activate(surface)) {
+        report(surface);
+    }
+}
+
+export function attachToolbar(toolbar) {
+    if (toolbar) {
+        wireToolbar(toolbar, command, restore);
+    }
 }
 
 export function dispose(element) {
