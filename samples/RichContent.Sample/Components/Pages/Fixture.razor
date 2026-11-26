@@ -18,7 +18,8 @@
             <button type="button" id="replace-same" @onclick="ReplaceSame">Replace with an equal copy</button>
             <button type="button" id="replace-other" @onclick="ReplaceOther">Replace with different content</button>
         </p>
-        <ContentDocumentEditor Document="_document" DocumentChanged="OnDocumentChanged" ErrorsChanged="OnErrorsChanged" />
+        <ContentDocumentEditor Document="_document" DocumentChanged="OnDocumentChanged" ErrorsChanged="OnErrorsChanged"
+                               Mode="EditorMode" Disabled="Disabled" />
         <p>Changes: <span id="changes">@_changes</span></p>
         <ul id="errors">
             @foreach (var error in _errors)
@@ -43,8 +44,13 @@
 
     [Parameter] public string Name { get; set; } = "";
 
-    /// <summary><c>blocks</c> or <c>write</c>. The editor has no mode parameter yet, so it is not used.</summary>
+    /// <summary><c>blocks</c> (the default) or <c>write</c>.</summary>
     [SupplyParameterFromQuery] public string? Mode { get; set; }
+
+    [SupplyParameterFromQuery] public bool Disabled { get; set; }
+
+    private RichContentEditorMode EditorMode =>
+        Mode == "write" ? RichContentEditorMode.Write : RichContentEditorMode.Blocks;
 
     protected override void OnInitialized() => _document = Fixtures.Get(Name);
 

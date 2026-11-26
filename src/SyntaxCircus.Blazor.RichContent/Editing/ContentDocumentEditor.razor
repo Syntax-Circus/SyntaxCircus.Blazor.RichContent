@@ -1,3 +1,4 @@
+@using SyntaxCircus.Blazor.RichContent.Editing.Writing
 @if (Document is not null)
 {
 <div class="doc-editor" role="group" aria-label="@Label">
@@ -9,7 +10,7 @@
     {
         <p class="error" role="alert">@error.Message</p>
     }
-    @Menu(0, true, inserted => Update(ContentDocumentOperations.Add(Document, 0, inserted)))
+    @Menu(0, true, inserted => Update(ContentDocumentOperations.Add(Latest, 0, inserted)))
     @for (var i = 0; i < Blocks.Length; i++)
     {
         var index = i;
@@ -18,16 +19,19 @@
             <header>
                 <strong>@TitleOf(block)</strong>
                 <div class="actions">
-                    <button type="button" disabled="@(Disabled || index == 0)" @onclick="() => Update(ContentDocumentOperations.Move(Document, index, -1))">Move up</button>
-                    <button type="button" disabled="@(Disabled || index == Blocks.Length - 1)" @onclick="() => Update(ContentDocumentOperations.Move(Document, index, 1))">Move down</button>
-                    <button type="button" disabled="@Disabled" @onclick="() => Update(ContentDocumentOperations.Remove(Document, index))">Remove</button>
+                    <button type="button" disabled="@(Disabled || index == 0)" @onclick="() => Update(ContentDocumentOperations.Move(Latest, index, -1))">Move up</button>
+                    <button type="button" disabled="@(Disabled || index == Blocks.Length - 1)" @onclick="() => Update(ContentDocumentOperations.Move(Latest, index, 1))">Move down</button>
+                    <button type="button" disabled="@Disabled" @onclick="() => Update(ContentDocumentOperations.Remove(Latest, index))">Remove</button>
                 </div>
             </header>
             @switch (block)
             {
+                case RichTextBlock rich when Mode == RichContentEditorMode.Write:
+                    <WritingBlock Nodes="rich.Nodes" NodesChanged="nodes => WriteNodes(index, rich.Id, nodes)" Disabled="Disabled" Label="Text block" />
+                    break;
                 case RichTextBlock rich:
                     <RichTextEditor Nodes="rich.Nodes" NodesChanged="nodes => Replace(index, rich with { Nodes = nodes })" Disabled="Disabled" Label="Text block" MaxDepth="MaxDepth"
-                                    BetweenNodes="nodeIndex => Menu(nodeIndex, false, inserted => Update(ContentDocumentOperations.SplitRichText(Document, index, nodeIndex, inserted)))" />
+                                    BetweenNodes="nodeIndex => Menu(nodeIndex, false, inserted => Update(ContentDocumentOperations.SplitRichText(Latest, index, nodeIndex, inserted)))" />
                     break;
                 case GalleryBlock gallery:
                     <GalleryBlockEditor Block="gallery" BlockChanged="updated => Replace(index, updated)" Disabled="Disabled" />
@@ -64,7 +68,7 @@
                 </ul>
             }
         </section>
-        @Menu(index + 1, true, inserted => Update(ContentDocumentOperations.Add(Document, index + 1, inserted)))
+        @Menu(index + 1, true, inserted => Update(ContentDocumentOperations.Add(Latest, index + 1, inserted)))
     }
 </div>
 }

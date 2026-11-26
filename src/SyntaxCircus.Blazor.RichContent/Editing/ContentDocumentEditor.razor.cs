@@ -1,4 +1,4 @@
-using System.Collections.Immutable;
+﻿using System.Collections.Immutable;
 using Microsoft.AspNetCore.Components;
 using SyntaxCircus.RichContent;
 
@@ -29,11 +29,25 @@ public partial class ContentDocumentEditor
 
     [Parameter] public bool Disabled { get; set; }
 
+    /// <summary>
+    /// <see cref="RichContentEditorMode.Write"/> edits prose as continuous text. It needs interactive rendering, and
+    /// a <see cref="DocumentChanged"/> handler that stores the document before its first incomplete await, as
+    /// <c>@bind-Document</c> does.
+    /// </summary>
+    [Parameter] public RichContentEditorMode Mode { get; set; } = RichContentEditorMode.Blocks;
+
     [Parameter] public string Label { get; set; } = "Post body";
 
     [Parameter] public RichContentLimits? Limits { get; set; }
 
     [Parameter] public EventCallback<IReadOnlyList<RichContentError>> ErrorsChanged { get; set; }
+
+    // In Write mode, edits can arrive before the host has passed the last document back down, so each one must
+    // build on the one before.
+    private ContentDocument? _parameter;
+    private ContentDocument? _latest;
+
+    private ContentDocument Latest => Mode == RichContentEditorMode.Write && _latest is not null ? _latest : Document;
 
     private ImmutableArray<ContentBlock> Blocks => Document?.Blocks.IsDefault ?? true ? [] : Document.Blocks;
 
@@ -62,6 +76,11 @@ public partial class ContentDocumentEditor
 
     protected override async Task OnParametersSetAsync()
     {
+        if (!ReferenceEquals(Document, _parameter))
+        {
+            _parameter = _latest = Document;
+        }
+
         // Validation walks the whole tree; skip it when neither the (immutable) document nor the limits changed.
         if (Document is null || (ReferenceEquals(Document, _lastValidated) && Equals(Limits, _lastValidatedLimits)))
         {
@@ -86,9 +105,29 @@ public partial class ContentDocumentEditor
     private object KeyFor(ContentBlock block, int index) =>
         block.Id is not null && Blocks.Count(b => string.Equals(b.Id, block.Id, StringComparison.Ordinal)) == 1 ? block.Id : index;
 
-    private Task Update(ContentDocument document) => DocumentChanged.InvokeAsync(document);
+    private Task Update(ContentDocument document)
+    {
+        _latest = document;
+        return DocumentChanged.InvokeAsync(document);
+    }
 
-    private Task Replace(int index, ContentBlock block) => Update(ContentDocumentOperations.Replace(Document, index, block));
+    private Task Replace(int index, ContentBlock block) => Update(ContentDocumentOperations.Replace(Latest, index, block));
+
+    // An edit from a writing surface. Nothing here may await first: see RichTextSurface.ReceiveEdit.
+    private Task WriteNodes(int index, string id, ImmutableArray<RichTextNode> nodes)
+    {
+        var blocks = Latest.Blocks;
+        bool IsTarget(ContentBlock block) => block is RichTextBlock && string.Equals(block.Id, id, StringComparison.Ordinal);
+        if (index >= blocks.Length || !IsTarget(blocks[index]))
+        {
+            // It has moved, or has been removed.
+            index = blocks.ToList().FindIndex(IsTarget);
+        }
+
+        return index < 0
+            ? Task.CompletedTask
+            : Replace(index, (RichTextBlock)blocks[index] with { Nodes = nodes });
+    }
 
     private Dictionary<string, object?> ExtensionParameters(ExtensionBlock extension, int index) => new()
     {

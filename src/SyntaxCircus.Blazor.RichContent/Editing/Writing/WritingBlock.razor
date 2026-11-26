@@ -1,0 +1,25 @@
+@using SyntaxCircus.Blazor.RichContent.Editing.Surfaces
+
+<div class="rt-writing" role="group" aria-label="@Label">
+  @{
+    var start = 0;
+  }
+  @foreach (var part in _parts)
+  {
+    var current = part;
+    var nodes = Slice(start, current.Count);
+    start += current.Count;
+    if (current.Kind == SegmentKind.Surface)
+    {
+      <RichTextSurface @key="current" Nodes="nodes" NodesChanged="changed => SurfaceChanged(current, changed)" Disabled="Disabled" Label="@Label" />
+    }
+    else
+    {
+      @* Read-only until it has a card of its own. Its node is kept as it is. *@
+      <div @key="current" class="rt-placeholder" data-rt-card="@current.Kind.ToString().ToLowerInvariant()">
+        <strong>@NameOf(current.Kind)</strong> (edit in Blocks mode)
+        <pre>@Preview(nodes)</pre>
+      </div>
+    }
+  }
+</div>

@@ -16,6 +16,22 @@ public static class FixturePage
         // The prerendered page looks ready before it can respond to anything.
         await Expect(page.Locator("#fixture")).ToHaveAttributeAsync("data-interactive", "true", new() { Timeout = TimeoutMilliseconds });
         (await PageWatch.OpenSocketsAsync(page)).ShouldBe(1, "the lost-circuit check watches the Blazor WebSocket");
+        if (mode == "write")
+        {
+            await WaitForSurfacesAsync(page);
+        }
+    }
+
+    /// <summary>
+    /// Waits until every writing surface on the page can be typed into. The script is loaded after the page has
+    /// become interactive. The page must have at least one surface.
+    /// </summary>
+    public static async Task WaitForSurfacesAsync(IPage page)
+    {
+        await Expect(page.Locator("[data-rt-surface][data-rt-ready]").First)
+            .ToBeAttachedAsync(new() { Timeout = TimeoutMilliseconds });
+        await Expect(page.Locator("[data-rt-surface]:not([data-rt-ready])"))
+            .ToHaveCountAsync(0, new() { Timeout = TimeoutMilliseconds });
     }
 
     /// <summary>
