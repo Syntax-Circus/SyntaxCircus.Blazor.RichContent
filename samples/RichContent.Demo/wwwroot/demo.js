@@ -35,8 +35,25 @@
         }
     };
 
+    // A message about one editor must not stay beside another, or after the editor is disabled or enabled.
+    document.addEventListener('change', event => {
+        if (event.target.matches?.('#demo-sample, #demo-disabled')) {
+            say('');
+        }
+    });
+
     document.addEventListener('click', event => {
+        if (event.target.closest?.('#demo-reset')) {
+            say('');
+            return;
+        }
+
         if (!event.target.closest?.(BUTTON)) {
+            return;
+        }
+
+        if (document.getElementById('demo-disabled')?.checked) {
+            say('Enable the editor first.');
             return;
         }
 

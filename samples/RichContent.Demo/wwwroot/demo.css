@@ -15,6 +15,11 @@ body {
     --rt-surface: #ffffff;
 }
 
+/* The page's own scrollbar takes its scheme from the root element. */
+:root:has(.demo.dark) {
+    color-scheme: dark;
+}
+
 .demo.dark {
     color-scheme: dark;
     color: #e6eaf0;
