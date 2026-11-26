@@ -15,11 +15,11 @@
     {
         <p class="error rt-load-failed" role="alert">@WriteModeMessages.LoadFailed</p>
     }
-    @if (_switchRefused && _session.Rejected.Count > 0)
+    @if (_switchRefused)
     {
         <p class="error rt-switch-refused" role="alert">@WriteModeMessages.SwitchRefused</p>
     }
-    @if (_blockRefused && _session.Rejected.Count > 0)
+    @if (_blockRefused)
     {
         <p class="error rt-refused" role="alert">@WriteModeMessages.RearrangeRefused</p>
     }

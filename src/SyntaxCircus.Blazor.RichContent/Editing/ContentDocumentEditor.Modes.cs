@@ -271,6 +271,13 @@ public partial class ContentDocumentEditor : IDisposable
             return;
         }
 
+        // A refusal is out of date once nothing is left that could not be saved. It must not come back with the next.
+        if (_session.Rejected.Count == 0)
+        {
+            _switchRefused = false;
+            _blockRefused = false;
+        }
+
         if (disposed)
         {
             // This is in the middle of a render, where nothing may be raised.

@@ -78,6 +78,13 @@ public partial class WritingBlock
     {
         var incoming = Nodes.IsDefault ? [] : Nodes;
 
+        // With nothing left that could not be saved, a refusal for that reason is out of date. It must not stay, to
+        // seem to speak of whatever cannot be saved next.
+        if (_refusal is { Reason: WriteModeMessages.RearrangeRefused } && Session is { Rejected.Count: 0 })
+        {
+            _refusal = null;
+        }
+
         // The same value as last time is no news. It may be older than the edits made since, if the host has not
         // passed them back down yet.
         if (_parts.Count > 0 && incoming == _parameter)

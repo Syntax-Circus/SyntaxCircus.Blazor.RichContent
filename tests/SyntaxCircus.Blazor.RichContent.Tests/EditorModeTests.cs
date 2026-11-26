@@ -911,6 +911,78 @@ public sealed class EditorModeTests : IDisposable
     }
 
     [Theory]
+    [InlineData("switch", "a later edit")]
+    [InlineData("switch", "a replacement")]
+    [InlineData("block", "a later edit")]
+    [InlineData("insert", "a later edit")]
+    [InlineData("insert", "the stored content again")]
+    public async Task ARefusal_GoesWithWhatCausedIt_AndDoesNotComeBack(string refused, string putRight)
+    {
+        SetUpScript();
+        // Equal ids, so that rearranging blocks would redraw them, which is what the editor refuses.
+        var editor = Render(refused == "block"
+            ? Doc(new RichTextBlock("one", [Paragraph("first")]), new RichTextBlock("one", [Paragraph("second")]))
+            : OneBlock(Paragraph("first")));
+        var surface = Surfaces(editor)[0];
+        var (keys, generation) = Drawn("first");
+        await SendAsync(editor, surface, "not a patch");
+        var alert = refused == "switch" ? ".rt-switch-refused" : ".rt-refused";
+        switch (refused)
+        {
+            case "switch":
+                Switch(editor, "Blocks").Click();
+                break;
+            case "block":
+                editor.FindAll("section.block > header button").First(button => button.TextContent == "Move down").Click();
+                break;
+            default:
+                await editor.InvokeAsync(() => surface.InsertRequested(0, null, 0));
+                break;
+        }
+
+        editor.WaitForAssertion(() => editor.Find(alert));
+
+        if (putRight == "a replacement")
+        {
+            editor.Render(parameters => parameters.Add(e => e.Document, OneBlock(Paragraph("from the host"))));
+            generation = 2;
+        }
+        else
+        {
+            var text = putRight == "a later edit" ? "fine" : "first";
+            (await SendAsync(editor, surface, Patch(generation, keys, (keys[0], text)))).ShouldBeTrue();
+        }
+
+        editor.WaitForAssertion(() => _errors.Select(error => error.Code).ShouldNotContain(Unconvertible));
+        editor.FindAll(alert).ShouldBeEmpty();
+
+        // Something else cannot be saved, with nothing asked for since.
+        await SendAsync(editor, surface, "not a patch either " + generation);
+
+        Codes().ShouldContain(Unconvertible);
+        editor.FindAll(alert).ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task ARefusal_GoesWithTheCardWhoseRemovalEndedItsCause()
+    {
+        SetUpScript();
+        var editor = Render(OneBlock(Paragraph("first"), Code("code")));
+        var surface = Surfaces(editor)[0];
+        await SendAsync(editor, editor.FindComponent<CodeCard>().Instance, "not a patch");
+        Switch(editor, "Blocks").Click();
+        editor.WaitForAssertion(() => editor.Find(".rt-switch-refused"));
+
+        // The error goes with the card, in the middle of a render.
+        editor.Find("[data-rt-card] .rt-card-header [aria-label=Remove]").Click();
+        editor.FindAll("[data-rt-confirm] button")[0].Click();
+        editor.WaitForAssertion(() => Codes().ShouldNotContain(Unconvertible));
+        await SendAsync(editor, surface, "not a patch");
+
+        editor.FindAll(".rt-switch-refused").ShouldBeEmpty();
+    }
+
+    [Theory]
     // The block menu, and Insert in a writing surface of a block that comes later.
     [InlineData("menu")]
     [InlineData("surface")]
