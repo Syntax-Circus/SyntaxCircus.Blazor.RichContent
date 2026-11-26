@@ -446,6 +446,66 @@ public sealed class EditorModeTests : IDisposable
         editor.WaitForAssertion(() => editor.FindAll(".rt-surface-stalled").ShouldBeEmpty(), TimeSpan.FromSeconds(10));
     }
 
+    [Theory]
+    [InlineData("disconnected")]
+    [InlineData("cancelled")]
+    [InlineData("hangs")]
+    public void AToolbarAttachThatDoesNotArrive_IsShown_AndTriedAgain(string outcome)
+    {
+        SetUpScript();
+        RetryAfter(TimeSpan.FromMilliseconds(30));
+        var attach = _module.SetupVoid("attachToolbar", _ => true);
+        if (outcome == "cancelled")
+        {
+            attach.SetCanceled();
+        }
+        else if (outcome == "disconnected")
+        {
+            attach.SetException(new JSDisconnectedException("gone"));
+        }
+
+        var editor = Render(OneBlock(Paragraph("first")));
+
+        editor.WaitForAssertion(() => editor.Find(".rt-toolbar-stalled"), TimeSpan.FromSeconds(10));
+        IsWriting(editor).ShouldBeTrue();
+        _module.SetupVoid("attachToolbar", _ => true).SetVoidResult();
+
+        editor.WaitForAssertion(() => editor.FindAll(".rt-toolbar-stalled").ShouldBeEmpty(), TimeSpan.FromSeconds(10));
+        _modes.ShouldBeEmpty();
+        _context.Renderer.UnhandledException.IsCompleted.ShouldBeFalse();
+    }
+
+    [Fact]
+    public void AToolbarScriptThatThrows_FallsBackToBlocks()
+    {
+        SetUpScript();
+        _module.SetupVoid("attachToolbar", _ => true).SetException(new JSException("broken"));
+
+        var editor = Render(OneBlock(Paragraph("first")));
+
+        editor.WaitForAssertion(() => IsWriting(editor).ShouldBeFalse(), TimeSpan.FromSeconds(10));
+        editor.Find(".rt-load-failed");
+    }
+
+    [Fact]
+    public async Task ALoadFailure_DoesNotTakeAwayWhatCouldNotBeSaved()
+    {
+        SetUpScript();
+        var editor = Render(OneBlock(Paragraph("first")));
+        var surface = Surfaces(editor)[0];
+        await SendAsync(editor, surface, "not a patch");
+        // Only now does a code card appear, and its script cannot be used.
+        _context.JSInterop.SetupModule(CodeCard.ModulePath).SetupVoid("attach", _ => true).SetException(new JSException("broken"));
+
+        editor.Render(parameters => parameters.Add(e => e.Document, OneBlock(Paragraph("first"), Code("added"))));
+
+        editor.WaitForAssertion(() => editor.Find(".rt-surface-failed"), TimeSpan.FromSeconds(10));
+        editor.WaitForAssertion(() => editor.Find(".rt-switch-refused"), TimeSpan.FromSeconds(10));
+        IsWriting(editor).ShouldBeTrue();
+        Surfaces(editor).ShouldContain(surface);
+        Codes().ShouldContain(Unconvertible);
+    }
+
     [Fact]
     public void AFirstDrawThatIsCancelled_AndThenThrows_FallsBackToBlocks()
     {
