@@ -190,7 +190,10 @@ public partial class ContentDocumentEditor
         return at < 0 || CouldRedrawUnsaved() ? Task.CompletedTask : Update(ContentDocumentOperations.Remove(Latest, at));
     }
 
-    // Blocks whose ids are not unique are keyed by their position, so that moving one draws others again.
+    private Task AddBlock(int position, ContentBlock block) =>
+        CouldRedrawUnsaved() ? Task.CompletedTask : Update(ContentDocumentOperations.Add(Latest, position, block));
+
+    // Blocks whose ids are not unique are keyed by their position, so that adding or moving one draws others again.
     private bool CouldRedrawUnsaved()
     {
         _blockRefused = _session.Rejected.Count > 0

@@ -86,6 +86,11 @@ internal sealed class WritingSession
     public void ReportScriptFailure() => ScriptFailed?.Invoke();
 
     /// <summary>
+    /// Asked before a writing block splits for a new block. True if the editor will not add one now, and says why.
+    /// </summary>
+    public Func<bool> RefusesNewBlock { get; set; } = () => false;
+
+    /// <summary>
     /// True while parts are disabled only because the view is about to change, and so may be enabled again.
     /// </summary>
     public Func<bool> DisabledBriefly { get; set; } = () => false;

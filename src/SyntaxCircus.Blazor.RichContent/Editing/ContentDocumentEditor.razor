@@ -35,7 +35,7 @@
     {
         <p class="error" role="alert">@error.Message</p>
     }
-    @Menu(0, true, inserted => Update(ContentDocumentOperations.Add(Latest, 0, inserted)))
+    @Menu(0, true, inserted => AddBlock(0, inserted))
     @foreach (var shown in ShownBlocks())
     {
         var index = shown.Index;
@@ -109,7 +109,7 @@
         </section>
         @if (!shown.IsPlace)
         {
-            @Menu(index + 1, true, inserted => Update(ContentDocumentOperations.Add(Latest, index + 1, inserted)))
+            @Menu(index + 1, true, inserted => AddBlock(index + 1, inserted))
         }
     }
     @if (_pending is not null)

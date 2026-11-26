@@ -910,6 +910,41 @@ public sealed class EditorModeTests : IDisposable
         Codes().ShouldContain(Unconvertible);
     }
 
+    [Theory]
+    // The block menu, and Insert in a writing surface of a block that comes later.
+    [InlineData("menu")]
+    [InlineData("surface")]
+    public async Task AnInsertThatWouldRedrawUnsavedText_BecauseBlocksShareAnId_IsRefused(string from)
+    {
+        SetUpScript();
+        var editor = Render(Doc(
+            new RichTextBlock("same", [Paragraph("first")]),
+            new RichTextBlock("same", [Paragraph("second"), Code("code")])));
+        var surfaces = Surfaces(editor);
+        var unsaved = surfaces[0];
+        await SendAsync(editor, unsaved, "not a patch");
+
+        if (from == "menu")
+        {
+            editor.Find(".insert-menu[data-position='0'] button:not([disabled])").Click();
+        }
+        else
+        {
+            // After the paragraph and before the card, which splits that block. The choice is the call to action,
+            // which follows the choices of nodes, the gallery and the callout.
+            var callToAction = InsertChoice.ForNodes(RichContentLimits.Default.Depth).Count + 2;
+            var (keys, _) = Drawn("second");
+            await editor.InvokeAsync(() => surfaces[1].InsertRequested(callToAction, keys[0], 0));
+        }
+
+        _changes.ShouldBeEmpty();
+        editor.Find(".rt-refused").TextContent.ShouldContain("could not be saved");
+        Surfaces(editor)[0].ShouldBeSameAs(unsaved);
+        Codes().ShouldContain(Unconvertible);
+        // Nothing of the block asked from went anywhere.
+        editor.FindAll("[data-rt-card=code]").Count.ShouldBe(1);
+    }
+
     [Fact]
     public async Task ATextBlockWithUnsavedText_AsksBeforeItIsRemoved()
     {

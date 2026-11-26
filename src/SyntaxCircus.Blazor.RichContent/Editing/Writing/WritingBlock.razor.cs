@@ -328,6 +328,12 @@ public partial class WritingBlock
         }
         else if (choice.CreateBlock is { } create && InsertBlockAt.HasDelegate)
         {
+            // Asked before anything is let go of here: a new block can have other blocks drawn again.
+            if (Session?.RefusesNewBlock() == true)
+            {
+                return;
+            }
+
             // Between two nodes, the ones from here on go to a block of their own, after the new one. This lets go
             // of them first, so that nothing a surface sends meanwhile can bring them back here.
             if (at > 0 && at < _nodes.Length && !TryRearrange([.. _nodes.AsSpan(0, at)], part))

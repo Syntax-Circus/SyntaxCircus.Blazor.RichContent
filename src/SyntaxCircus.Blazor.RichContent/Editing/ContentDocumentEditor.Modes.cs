@@ -47,6 +47,17 @@ public partial class ContentDocumentEditor : IDisposable
         _session.ScriptFailed += ScriptFailed;
         _session.ReadOnlyChanged += ReadOnlyChanged;
         _session.DisabledBriefly = () => _pending is not null && !Disabled;
+        _session.RefusesNewBlock = () =>
+        {
+            var refused = CouldRedrawUnsaved();
+            if (refused)
+            {
+                // This comes from a writing block, and not as an event of this component.
+                StateHasChanged();
+            }
+
+            return refused;
+        };
     }
 
     public void Dispose()
