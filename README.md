@@ -267,7 +267,7 @@ editor is experimental: no browser test hosts one there in Write mode.
 | --- | --- |
 | Ctrl/Cmd+B, I | Bold, italic |
 | Ctrl/Cmd+E | Inline code |
-| Ctrl/Cmd+K | Link box: Enter applies, Escape cancels; applying an empty address removes the link. With nothing selected, the address becomes the link text |
+| Ctrl/Cmd+K | Link box: Enter applies, Escape cancels (neither does while the browser reports that an input method is composing); applying an empty address removes the link. With nothing selected, the address becomes the link text |
 | Enter | New paragraph or list item; on an empty list item or quote line, leaves it. Does nothing in a table cell |
 | Shift+Enter | Same as Enter (the model has no line break) |
 | Tab, Shift+Tab | In a list, nest and un-nest the item. When nothing can move, and outside lists, focus moves as usual |

@@ -1264,7 +1264,16 @@ export function wireToolbar(area, { run, restore, link }) {
         }
     });
     area.addEventListener('keydown', event => {
-        if (event.key === 'Enter' && !event.isComposing && event.target.matches('[data-rt-link-input]')) {
+        if (!event.target.matches('[data-rt-link-input]')) {
+            return;
+        }
+
+        // A key that an input method takes, as the Enter or Escape that confirms or cancels what is being composed,
+        // is neither applied here nor passed on, since .NET cannot tell it from any other. Some browsers say so only
+        // with the key code 229, notably for the key that ends a composition.
+        if (event.isComposing || event.keyCode === 229) {
+            event.stopPropagation();
+        } else if (event.key === 'Enter') {
             linkNow(event, checkedAddress(area));
         }
     });

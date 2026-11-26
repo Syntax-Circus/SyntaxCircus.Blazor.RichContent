@@ -2380,6 +2380,50 @@ public class SurfaceCommandTests(SampleHost host) : SurfaceTest(host)
         await ShouldHaveNodesAsync(P(Code("ab"), T("c")));
     }
 
+    // ---- The link box and an input method ----
+
+    // A real input method cannot be driven here. These events say what one says while it composes: isComposing, or only
+    // the key code 229, which is all some browsers say, notably for the Enter that ends a composition.
+    [Theory]
+    [InlineData("Enter", true, 13)]
+    [InlineData("Enter", false, 229)]
+    [InlineData("Enter", true, 229)]
+    [InlineData("Escape", true, 27)]
+    [InlineData("Escape", false, 229)]
+    public async Task LinkBox_IgnoresAKeyOfAComposition(string key, bool composing, int keyCode)
+    {
+        await OpenEmptyAsync();
+        await Page.Keyboard.TypeAsync("word");
+        await SelectAsync(FirstBlock, 0, 4);
+        await Tool("Link").ClickAsync();
+        await LinkAddress.FillAsync("/composed");
+        await Expect(Page.GetByRole(AriaRole.Button, new() { Name = "Apply link" }))
+            .ToHaveAttributeAsync("data-rt-address", "/composed");
+
+        var sent = await LinkAddress.EvaluateAsync<bool>(
+            """
+            (input, [key, composing, keyCode]) => {
+                const event = new KeyboardEvent('keydown', { key, isComposing: composing, bubbles: true, cancelable: true });
+                Object.defineProperty(event, 'keyCode', { value: keyCode });
+                input.dispatchEvent(event);
+                return event.isComposing === composing && event.keyCode === keyCode;
+            }
+            """,
+            new object[] { key, composing, keyCode });
+        sent.ShouldBeTrue();
+
+        // Two round trips: had .NET heard of the key, the box would have closed and the command come back by now.
+        await SaveAsync(Page);
+        await SaveAsync(Page);
+        await Expect(LinkAddress).ToHaveValueAsync("/composed");
+        await Expect(Start.Locator("a")).ToHaveCountAsync(0);
+
+        // The same key outside a composition does what it always does.
+        await LinkAddress.PressAsync(key);
+        await Expect(LinkAddress).ToHaveCountAsync(0);
+        await Expect(Start.Locator("a")).ToHaveCountAsync(key == "Enter" ? 1 : 0);
+    }
+
     // ---- Delivery and policy ----
 
     [Theory]
