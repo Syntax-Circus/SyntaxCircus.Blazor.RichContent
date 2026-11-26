@@ -168,7 +168,8 @@ function closestWithin(root, node, selector) {
 
 // ---- State at the cursor ----
 
-const fontAtCaret = () => String(document.queryCommandValue('fontName')).replace(/["']/g, '');
+// The first family of what the browser answers, which can be a computed list.
+const fontAtCaret = () => String(document.queryCommandValue('fontName')).split(',')[0].replace(/["']/g, '').trim();
 
 // The text nodes the range selects at least one character of.
 function selectedTexts(root, range) {
@@ -185,10 +186,16 @@ function selectedTexts(root, range) {
     return found;
 }
 
+// The element that makes the node code, if it is: the innermost <code> or face around it decides.
+function codeAround(root, node) {
+    const element = closestWithin(root, node, 'code, font[face]');
+    return element?.matches(CODE_SELECTOR) ? element : null;
+}
+
 function isCode(root, range) {
     if (!range.collapsed) {
         const texts = selectedTexts(root, range);
-        return texts.length > 0 && texts.every(text => closestWithin(root, text, CODE_SELECTOR) !== null);
+        return texts.length > 0 && texts.every(text => codeAround(root, text) !== null);
     }
 
     // The browser knows what it will format the next character as, which a click on a button may just have changed.
@@ -197,7 +204,7 @@ function isCode(root, range) {
         return true;
     }
 
-    return font !== PLAIN_FACE && closestWithin(root, range.startContainer, CODE_SELECTOR) !== null;
+    return font !== PLAIN_FACE && codeAround(root, range.startContainer) !== null;
 }
 
 function linksIn(root, range) {
@@ -323,12 +330,13 @@ const MAX_DEPTH = 8;
 
 // The depth of the model node an element or text is read as.
 function modelDepth(node) {
-    if (node.nodeType !== Node.ELEMENT_NODE) {
+    if (node.nodeType !== Node.ELEMENT_NODE || node.tagName === 'CODE') {
         return 1;
     }
 
-    if (node.matches(CODE_SELECTOR)) {
-        return 1;
+    // A <font> adds no level of its own: the code it makes is the text in it, below any formatting that is in it too.
+    if (node.tagName === 'FONT') {
+        return Math.max(1, ...[...node.childNodes].map(modelDepth));
     }
 
     // A list item shown without its paragraph has one all the same, around all but its lists.
@@ -422,30 +430,11 @@ function shiftItems(root, outwards) {
 
 // ---- Inline commands ----
 
+// Both ways are the font command, which changes the face and nothing else. Commands that remove formatting take bold
+// and italic with the code, which cannot be put back where they were only in part of the selection.
 function toggleCode(root) {
     const range = selectionIn(root);
-    if (!range) {
-        return false;
-    }
-
-    if (!isCode(root, range)) {
-        return exec('fontName', CODE_FACE);
-    }
-
-    if (range.collapsed) {
-        return GECKO ? exec('removeFormat') : exec('fontName', PLAIN_FACE);
-    }
-
-    // The one command that takes code away also takes bold and italic, which are put back.
-    const kept = ['bold', 'italic'].filter(command => document.queryCommandState(command));
-    const done = exec('removeFormat');
-    for (const command of kept) {
-        if (!document.queryCommandState(command)) {
-            exec(command);
-        }
-    }
-
-    return done;
+    return range !== null && exec('fontName', isCode(root, range) ? PLAIN_FACE : CODE_FACE);
 }
 
 function selectNode(node) {
@@ -688,32 +677,54 @@ function toggleList(root, command, tag) {
     return keepingSelection(root, () => exec(command));
 }
 
-// Ends the quoting of the selected lines.
-function unquote(root) {
-    const quoted = () => selectedBlocks(root, selectionIn(root)).filter(block => block.tagName === 'BLOCKQUOTE');
-    if (quoted().length === 0) {
-        return exec('outdent');
+// A paragraph holding what the line holds.
+function paragraphOf(line) {
+    const paragraph = document.createElement('p');
+    paragraph.append(...line.cloneNode(true).childNodes);
+    return paragraph;
+}
+
+const textsOf = elements => JSON.stringify([...elements].map(element => element.textContent));
+
+// Chromium and WebKit make a quote with no paragraph in it, its lines apart by <br> alone, and Enter in one starts
+// another quote. Their indent keeps paragraphs but writes style attributes. So the quote is made their way, and then
+// what is in it is replaced by the lines as paragraphs, as a list's items are. Both steps are the browser's own.
+function quoteAsParagraphs(root) {
+    const lines = selectedBlocks(root, selectionIn(root));
+    const paragraphs = lines.map(paragraphOf);
+    const wanted = textsOf(paragraphs);
+    const text = paragraphs.map(paragraph => paragraph.textContent).join('');
+    const saved = saveSelection(root);
+    if (!exec('formatBlock', 'blockquote')) {
+        return false;
     }
 
-    // Chromium and WebKit make a quote with no paragraph inside, holding its lines apart by <br> alone. Each line is
-    // made a quote of its own, and then a paragraph, so that they stay apart.
-    for (let attempt = 0; attempt < 50; attempt++) {
-        const br = quoted().map(lineBreakIn).find(Boolean);
-        if (!br) {
-            break;
-        }
-
-        keepingSelection(root, () => {
-            selectNode(br);
-            return exec('insertParagraph') && !br.isConnected;
-        });
-        if (br.isConnected) {
-            break;
-        }
+    if (paragraphs.length === 0) {
+        return true;
     }
 
-    const quotes = quoted();
-    return quotes.length > 0 && formatEach(root, 'p', quotes);
+    const range = selectionIn(root);
+    const quote = range && closestWithin(root, range.startContainer, 'blockquote');
+    if (!quote || quote.textContent !== text) {
+        exec('undo');
+        return false;
+    }
+
+    const inside = document.createRange();
+    inside.selectNodeContents(quote);
+    // The serialization of copies of what was in the surface.
+    const markup = serialized(paragraphs);
+    select(inside);
+    exec('insertHTML', markup);
+    if (!quote.isConnected || textsOf(quote.children) !== wanted
+        || [...quote.childNodes].some(child => child.nodeName !== 'P')) {
+        exec('undo');
+        exec('undo');
+        return false;
+    }
+
+    restoreSelection(root, saved);
+    return true;
 }
 
 function toggleQuote(root) {
@@ -723,7 +734,12 @@ function toggleQuote(root) {
     }
 
     if (closestWithin(root, range.startContainer, 'blockquote')) {
-        return leavingParagraphs(root, () => unquote(root));
+        return leavingParagraphs(root, () => exec('outdent'));
+    }
+
+    // A quote cannot hold a quote.
+    if (selectedBlocks(root, range).some(block => closestWithin(root, block, 'blockquote'))) {
+        return false;
     }
 
     // A quote cannot hold a heading.
@@ -733,8 +749,8 @@ function toggleQuote(root) {
     }
 
     // Firefox quotes with the paragraphs kept inside, by indenting; asked to format a block as a quote it makes one
-    // in which Enter only breaks the line. The others indent with style attributes, and format a block properly.
-    return keepingSelection(root, () => (GECKO ? exec('indent') : exec('formatBlock', 'blockquote')));
+    // in which Enter only breaks the line.
+    return GECKO ? keepingSelection(root, () => exec('indent')) : quoteAsParagraphs(root);
 }
 
 const BLOCK_COMMANDS = {
@@ -866,11 +882,6 @@ function leaveEmptyLine(root) {
         return false;
     }
 
-    if (block.tagName === 'BLOCKQUOTE') {
-        // A quote made without a paragraph inside is itself the line.
-        return exec('formatBlock', 'p');
-    }
-
     exec('outdent');
     const after = selectionIn(root);
     if (after && !closestWithin(root, after.startContainer, 'p,blockquote')) {
@@ -893,7 +904,7 @@ export function handleBeforeInput(root, inline, event) {
 
     const type = event.inputType;
     // Nothing the model cannot store, and nothing dragged in.
-    if (FORMATTING.test(type) || type === 'insertFromDrop' || type === 'insertFromPaste') {
+    if (FORMATTING.test(type) || type === 'insertFromDrop' || type === 'insertFromPaste' || type === 'deleteByDrag') {
         event.preventDefault();
         return;
     }
@@ -939,7 +950,7 @@ function leaveCodeAtLineEnd(root) {
         return false;
     }
 
-    const code = closestWithin(root, range.startContainer, CODE_SELECTOR);
+    const code = codeAround(root, range.startContainer);
     const block = code && textBlockOf(root, code);
     if (!block || fontAtCaret() === PLAIN_FACE
         || rangeBetween([range.startContainer, range.startOffset], ownEnd(block)).toString() !== '') {
@@ -1170,12 +1181,45 @@ export function surfaceFocused(root) {
     }
 }
 
-// run(surfaceElement, name, argument) runs a command; restore(surfaceElement) gives it back focus and selection.
-export function wireToolbar(toolbar, run, restore) {
+// The address .NET has accepted for exactly what the link box holds now, or null. .NET alone decides what may be
+// linked: it puts both on the Apply button once it has checked what was typed.
+function checkedAddress(area) {
+    const apply = area.querySelector('[data-rt-link-apply]');
+    const input = area.querySelector('[data-rt-link-input]');
+    return apply && input && apply.getAttribute('data-rt-checked') === input.value
+        ? apply.getAttribute('data-rt-address')
+        : null;
+}
+
+// run(surfaceElement, name, argument) runs a command; restore(surfaceElement) gives it back focus and selection;
+// link(surfaceElement, address) makes or removes a link and has the box closed.
+export function wireToolbar(area, { run, restore, link }) {
+    const toolbar = area.querySelector('[data-rt-toolbar]');
     const surface = () => {
-        const found = active.get(toolbar.closest('[data-rt-editor]'));
+        const found = active.get(area.closest('[data-rt-editor]'));
         return found?.isConnected ? found : null;
     };
+    // Where the browser can act at once, the event goes no further, so that .NET does not act on it as well. Otherwise
+    // it reaches .NET, which checks the address and runs the command itself.
+    const linkNow = (event, address) => {
+        if (address !== null && surface()) {
+            event.preventDefault();
+            event.stopPropagation();
+            link(surface(), address);
+        }
+    };
+    area.addEventListener('click', event => {
+        if (event.target.closest('[data-rt-link-apply]')) {
+            linkNow(event, checkedAddress(area));
+        } else if (event.target.closest('[data-rt-link-remove]')) {
+            linkNow(event, '');
+        }
+    });
+    area.addEventListener('keydown', event => {
+        if (event.key === 'Enter' && !event.isComposing && event.target.matches('[data-rt-link-input]')) {
+            linkNow(event, checkedAddress(area));
+        }
+    });
     // A press on a button must not take the selection from the text. A <select> cannot open without it.
     toolbar.addEventListener('mousedown', event => {
         if (event.target.closest('button')) {

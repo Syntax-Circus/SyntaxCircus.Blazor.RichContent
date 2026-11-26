@@ -13,9 +13,27 @@ const surfaces = new Map();
 let reported = null;
 let styled = false;
 
-// What the commands depend on, whatever styles the host has. A heading that looked bold would count as bold, and the
-// bold command would then take boldness away instead of adding it; inline code has no look of its own. Made through
-// the object model, which no content security policy refuses.
+// The browser's commands decide what is bold, italic or code from how text looks, not from what the elements are. A
+// heading, a quote or a link that a page showed bold or italic would count as formatted, and the command would take
+// the formatting away instead of adding it; a bold element shown unbold would be wrapped again; and a font whose
+// family a page reset would no longer be code. So in a surface those three looks follow the elements alone, whatever
+// the page's own styles say, unless they too are !important and more specific.
+// Only the surface itself is given a weight and a style; everything in it inherits them. Giving each kind of block its
+// own makes Chromium and WebKit write those into style attributes on what moves from one block to another.
+const SURFACE_STYLES = `
+    [data-rt-surface] { font-weight: 400 !important; font-style: normal !important; }
+    [data-rt-surface] :is(p, div, h2, h3, h4, ul, ol, li, blockquote, a, span, code, font) {
+        font-weight: inherit !important; font-style: inherit !important;
+    }
+    [data-rt-surface] :is(b, strong) { font-weight: 700 !important; font-style: inherit !important; }
+    [data-rt-surface] :is(i, em) { font-style: italic !important; font-weight: inherit !important; }
+    [data-rt-surface] :is(code, font[face="rt-code"]) {
+        font-family: "rt-code", monospace !important; background: rgba(127, 127, 127, 0.18);
+    }
+    [data-rt-surface] font[face="rt-plain"] { font-family: inherit !important; }
+`;
+
+// Made through the object model, which no content security policy refuses.
 function addStyles() {
     if (styled) {
         return;
@@ -23,8 +41,7 @@ function addStyles() {
 
     styled = true;
     const sheet = new CSSStyleSheet();
-    sheet.replaceSync('[data-rt-surface] :is(h2, h3, h4) { font-weight: 400; }'
-        + ' [data-rt-surface] font[face="rt-code"] { background: rgba(127, 127, 127, 0.18); }');
+    sheet.replaceSync(SURFACE_STYLES);
     document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
 }
 
@@ -302,9 +319,17 @@ export function attach(element, dotNetRef, options) {
             report(surface);
         }
     });
-    const refuse = event => event.preventDefault();
-    on(element, 'dragover', refuse);
-    on(element, 'drop', refuse);
+    // Cancelling the drop is not enough: the browser still takes the move to have happened, and deletes what was
+    // dragged from where it came, here or elsewhere. So nothing in a surface starts a drag, and a surface tells a drag
+    // from elsewhere that it takes nothing.
+    on(element, 'dragstart', event => event.preventDefault());
+    on(element, 'dragover', event => {
+        event.preventDefault();
+        if (event.dataTransfer) {
+            event.dataTransfer.dropEffect = 'none';
+        }
+    });
+    on(element, 'drop', event => event.preventDefault());
 
     // A link in a surface is text to edit, never somewhere to go.
     const stay = event => {
@@ -368,9 +393,21 @@ export function restore(element) {
     }
 }
 
-export function attachToolbar(toolbar) {
-    if (toolbar) {
-        wireToolbar(toolbar, command, restore);
+// Makes or removes a link as the link box asked, with an address .NET has already accepted, then has .NET close the
+// box. Called in the click or key press, so that the edit leaves before anything the author clicks next.
+function link(element, address) {
+    command(element, 'link', address);
+    const surface = surfaces.get(element);
+    if (surface) {
+        // With the connection down the box stays open.
+        callDotNet(surface.dotNetRef, 'LinkApplied').catch(() => {});
+    }
+}
+
+// area holds the toolbar and, while it is open, the link box.
+export function attachToolbar(area) {
+    if (area) {
+        wireToolbar(area, { run: command, restore, link });
     }
 }
 

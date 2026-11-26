@@ -8,6 +8,7 @@ namespace SyntaxCircus.Blazor.RichContent.BrowserTests;
 /// Every way of joining two blocks keeps all the text and its formatting, and can be undone. Firefox's own editing
 /// does not: see <see cref="Control_ABareContentEditable_ShowsWhatTheEngineItselfDoes"/>.
 /// </summary>
+[Collection(ClipboardTests.Name)]
 public class SurfaceJoinTests(SampleHost host) : SurfaceTest(host)
 {
     private const string Inline = "x <code>CO</code> y <strong>BO</strong> <a href=\"/l\">LI</a> <em>EM</em> z";
@@ -103,6 +104,10 @@ public class SurfaceJoinTests(SampleHost host) : SurfaceTest(host)
             Count(after, "strong").ShouldBe(codes, $"{operation}: {Compact(after)}");
             Count(after, "link").ShouldBe(codes, $"{operation}: {Compact(after)}");
             (await ErrorCodesAsync(Page)).ShouldBeEmpty(operation);
+            // No browser writes styles into what it moves from one block to another, as some do when the page gives
+            // each kind of block styles of its own to keep. A host's policy may refuse them.
+            (await Start.EvaluateAsync<string[]>("s => [...s.querySelectorAll('[style]')].map(e => e.outerHTML)"))
+                .ShouldBeEmpty(operation);
 
             // The browser's own undo takes it back, in as many steps as it took.
             await Start.FocusAsync();

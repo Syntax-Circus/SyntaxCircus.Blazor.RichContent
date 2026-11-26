@@ -219,6 +219,7 @@ public class SurfaceCommandTests(SampleHost host) : SurfaceTest(host)
         await Expect(Start.Locator("li")).ToHaveCountAsync(0);
 
         await ShouldHaveNodesAsync(P(T("before")), P(T("first")), P(T("second")), P(T("after")));
+        await Expect(Start.Locator("[style]")).ToHaveCountAsync(0);
         // Each is a paragraph on the screen too, not a line in some other element.
         (await Start.EvaluateAsync<string[]>(
             "s => [...s.querySelectorAll('p')].map(p => p.textContent)")).ShouldBe(["before", "first", "second", "after"]);
@@ -291,17 +292,66 @@ public class SurfaceCommandTests(SampleHost host) : SurfaceTest(host)
 
         await Tool("Quote").ClickAsync();
 
-        // One quote of two paragraphs, or one quote for each: engines differ, and both keep the paragraphs apart.
-        var quoted = await SavedAsync();
-        quoted.ShouldAllBe(node => node.Contains("\"kind\":\"quote\""));
-        quoted.SelectMany(node => JsonNode.Parse(node)!["children"]!.AsArray())
-            .Select(child => $"{child!["kind"]}:{TextOf(child)}").ShouldBe(["paragraph:first", "paragraph:second"]);
+        await ShouldHaveNodesAsync(Quote(P(T("first")), P(T("second"))));
         await Expect(Tool("Quote")).ToHaveAttributeAsync("aria-pressed", "true");
         await SelectAsync(Start, 2, 8);
 
         await Tool("Quote").ClickAsync();
 
         await ShouldHaveNodesAsync(P(T("first")), P(T("second")));
+    }
+
+    [Fact]
+    public async Task Quote_BetweenOtherBlocks_IsOneQuote_AndTheBrowserUndoesAndRedoesItExactly()
+    {
+        await OpenEmptyAsync();
+        await PasteAsync("before\n\nfirst\n\nsecond\n\nthird\n\nafter");
+        await SelectAsync(Start, "beforefi".Length, "beforefirstsecondth".Length);
+        var plain = await SavedAsync();
+        string[] quoted = [P(T("before")), Quote(P(T("first")), P(T("second")), P(T("third"))), P(T("after"))];
+
+        await Tool("Quote").ClickAsync();
+
+        await ShouldHaveNodesAsync(quoted);
+        await StepUntilAsync("ControlOrMeta+z", plain);
+        await StepUntilAsync("ControlOrMeta+Shift+z", quoted);
+    }
+
+    [Fact]
+    public async Task EnterInAQuote_MakesAParagraphInTheSameQuote()
+    {
+        await OpenEmptyAsync();
+        await Page.Keyboard.TypeAsync("onetwo");
+        await Tool("Quote").ClickAsync();
+        await Expect(Start.Locator("blockquote")).ToHaveCountAsync(1);
+        await PlaceCaretAsync(Start.Locator("blockquote"), 3);
+
+        await Page.Keyboard.PressAsync("Enter");
+
+        await ShouldHaveNodesAsync(Quote(P(T("one")), P(T("two"))));
+        await PlaceCaretAsync(Start.Locator("blockquote p").Last);
+        await Page.Keyboard.PressAsync("Shift+Enter");
+        await Page.Keyboard.TypeAsync("three");
+        await ShouldHaveNodesAsync(Quote(P(T("one")), P(T("two")), P(T("three"))));
+    }
+
+    [Theory]
+    [InlineData("X", new[] { "firstX", "second" })]
+    [InlineData("X\n\nY", new[] { "firstX", "Y", "second" })]
+    public async Task PasteInAQuote_StaysInTheOneQuote(string pasted, string[] lines)
+    {
+        await OpenEmptyAsync();
+        await Page.Keyboard.TypeAsync("first");
+        await Page.Keyboard.PressAsync("Enter");
+        await Page.Keyboard.TypeAsync("second");
+        await SelectAsync(Start, 2, 8);
+        await Tool("Quote").ClickAsync();
+        await Expect(Start.Locator("blockquote p")).ToHaveCountAsync(2);
+        await PlaceCaretAsync(Start.Locator("blockquote p").First);
+
+        await PasteAsync(pasted);
+
+        await ShouldHaveNodesAsync(Quote([.. lines.Select(line => P(T(line)))]));
     }
 
     [Fact]
@@ -335,6 +385,83 @@ public class SurfaceCommandTests(SampleHost host) : SurfaceTest(host)
         await Expect(LinkAddress).ToHaveCountAsync(0);
 
         await ShouldHaveNodesAsync(P(T("see the docs now")));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task SaveClickedRightAfterApplyingALink_HasTheLink(bool enter)
+    {
+        await OpenEmptyAsync();
+        await Page.Keyboard.TypeAsync("text");
+        await SelectAsync(FirstBlock, 0, 4);
+        await Tool("Link").ClickAsync();
+        await LinkAddress.FillAsync("/quick");
+        await Expect(Page.GetByRole(AriaRole.Button, new() { Name = "Apply link" })).ToHaveAttributeAsync("data-rt-address", "/quick");
+
+        if (enter)
+        {
+            await LinkAddress.PressAsync("Enter");
+        }
+        else
+        {
+            await Page.GetByRole(AriaRole.Button, new() { Name = "Apply link" }).ClickAsync();
+        }
+
+        await ShouldHaveNodesAsync(P(Link("/quick", T("text"))));
+        await Expect(LinkAddress).ToHaveCountAsync(0);
+    }
+
+    [Fact]
+    public async Task AnAddressChangedSinceDotNetCheckedIt_IsCheckedAgain_BeforeItIsLinked()
+    {
+        await OpenEmptyAsync();
+        await Page.Keyboard.TypeAsync("text");
+        await SelectAsync(FirstBlock, 0, 4);
+        await Tool("Link").ClickAsync();
+        await LinkAddress.FillAsync("/checked");
+        await Expect(Page.GetByRole(AriaRole.Button, new() { Name = "Apply link" })).ToHaveAttributeAsync("data-rt-address", "/checked");
+
+        // Changed and applied in one task, before .NET can have answered for the new value.
+        await LinkAddress.EvaluateAsync("""
+            input => {
+                input.value = 'javascript:window.ran=1';
+                input.dispatchEvent(new InputEvent('input', { bubbles: true }));
+                document.querySelector('[data-rt-link-apply]').click();
+            }
+            """);
+
+        await Expect(Toolbar.Locator("..").GetByRole(AriaRole.Alert)).ToContainTextAsync("https:");
+        await Expect(Start.Locator("a")).ToHaveCountAsync(0);
+        await ShouldHaveNodesAsync(P(T("text")));
+    }
+
+    [Fact]
+    public async Task AskingForTheLinkBox_WhileRenderingLagsBehind_OpensIt_AndKeepsTheCircuit()
+    {
+        await OpenEmptyAsync();
+        await Page.Keyboard.TypeAsync("text");
+        await SelectAsync(FirstBlock, 0, 4);
+        await Expect(Tool("Link")).ToBeEnabledAsync();
+
+        // Many reports and then the request, all sent before the browser can acknowledge one render. Blazor then
+        // holds renders back, so the box is asked for before it is drawn, while earlier renders are still completing.
+        await Start.EvaluateAsync("""
+            surface => {
+                const { dotNetRef } = surface.richContentSurface;
+                for (let i = 0; i < 40; i++) {
+                    dotNetRef.invokeMethodAsync('SelectionChanged', {
+                        bold: i % 2 === 0, italic: false, code: false, linkUrl: null,
+                        style: 'p', list: 'none', quote: false, inListItem: false,
+                    });
+                }
+                dotNetRef.invokeMethodAsync('LinkRequested');
+            }
+            """);
+
+        await Expect(LinkAddress).ToBeFocusedAsync();
+        await ApplyLinkAsync("/after");
+        await ShouldHaveNodesAsync(P(Link("/after", T("text"))));
     }
 
     [Fact]
@@ -412,6 +539,162 @@ public class SurfaceCommandTests(SampleHost host) : SurfaceTest(host)
         await Expect(LinkAddress).ToHaveCountAsync(0);
         await Expect(Start).ToBeFocusedAsync();
         (await Page.EvaluateAsync<string>("() => getSelection().toString()")).ShouldBe("text");
+    }
+
+    // The browser takes what is code from how text looks, so text that is not code must not look it: not even through a
+    // style attribute a command has written.
+    private async Task ShouldNotLookLikeCodeOutsideCodeAsync(string what) =>
+        (await Start.EvaluateAsync<string[]>(
+            """
+            surface => [...surface.querySelectorAll('*')]
+                .filter(element => element.closest('code, font[face]')?.getAttribute('face') !== 'rt-code'
+                    && element.closest('code') === null
+                    && getComputedStyle(element).fontFamily.includes('rt-code'))
+                .map(element => element.outerHTML)
+            """)).ShouldBeEmpty(what);
+
+    [Theory]
+    [MemberData(nameof(CodeRemovals))]
+    public async Task RemovingCode_ChangesOnlyTheCode_AndCanBeUndone(string name, string markup, int from, int to, string[] expected)
+    {
+        await OpenEmptyAsync();
+        await Start.EvaluateAsync(
+            "(s, markup) => { s.innerHTML = markup; s.dispatchEvent(new InputEvent('input', { bubbles: true })); }", markup);
+        var before = await SavedAsync();
+        await SelectAsync(FirstBlock, from, to);
+        await Expect(Tool("Inline code")).ToHaveAttributeAsync("aria-pressed", "true");
+
+        await Tool("Inline code").ClickAsync();
+
+        await Expect(Tool("Inline code")).ToHaveAttributeAsync("aria-pressed", "false");
+        var after = await SavedAsync();
+        after.Select(Canonical).ShouldBe(expected.Select(Canonical), name);
+        (await ErrorCodesAsync(Page)).ShouldBeEmpty();
+        await ShouldNotLookLikeCodeOutsideCodeAsync(name);
+
+        // One step of the browser's own undo takes it all back, exactly.
+        await Start.FocusAsync();
+        await UndoAsync();
+        (await SavedAsync()).ShouldBe(before, name);
+    }
+
+    private const string CodeStart = "<font face=\"rt-code\">";
+    private const string CodeEnd = "</font>";
+
+    private static string Coded(string inner) => CodeStart + inner + CodeEnd;
+
+    private static string LinkTo(string inner) => "<a href=\"/l\" data-rt-url=\"/l\">" + inner + "</a>";
+
+    public static TheoryData<string, string, int, int, string[]> CodeRemovals => new()
+    {
+        {
+            "partly bold", $"<p><b>a{Coded("bc")}</b>{Coded("de")}f</p>", 1, 5,
+            [P(Strong(T("abc")), T("def"))]
+        },
+        {
+            "partly italic, inside the code", $"<p>{Coded("<i>ab</i>cd")}</p>", 0, 4,
+            [P(Em(T("ab")), T("cd"))]
+        },
+        {
+            "bold and italic, each partly", $"<p><b>{Coded("ab")}</b><i>{Coded("cd")}</i>{Coded("<b><i>ef</i></b>gh")}</p>", 0, 8,
+            [P(Strong(T("ab")), Em(T("cd")), Strong(Em(T("ef"))), T("gh"))]
+        },
+        {
+            "code inside a link", $"<p>x {LinkTo(Coded("link"))} y</p>", 2, 6,
+            [P(T("x "), Link("/l", T("link")), T(" y"))]
+        },
+        {
+            "a link inside code", $"<p>{Coded("a " + LinkTo("<b>link</b>") + " b")}</p>", 0, 8,
+            [P(T("a "), Link("/l", Strong(T("link"))), T(" b"))]
+        },
+        {
+            "part of the code only", $"<p><b>{Coded("abcdef")}</b></p>", 2, 4,
+            [P(Strong(Code("ab"), T("cd"), Code("ef")))]
+        },
+        {
+            "formatted text and code around the selection are left alone",
+            $"<p><b>aa </b>{Coded("bb")} cc {Coded("<i>dd</i>")}</p>", 3, 5,
+            [P(Strong(T("aa ")), T("bb cc "), Em(Code("dd")))]
+        },
+    };
+
+    [Fact]
+    public async Task ApplyingCode_OverPartlyFormattedText_KeepsTheFormatting_AndRemovingItRestoresTheText()
+    {
+        await OpenEmptyAsync();
+        await Page.Keyboard.TypeAsync("abcdef");
+        await SelectAsync(FirstBlock, 1, 3);
+        await Tool("Bold").ClickAsync();
+        await Expect(Start.Locator("b, strong")).ToHaveCountAsync(1);
+        await SelectAsync(FirstBlock, 3, 5);
+        await Tool("Italic").ClickAsync();
+        await Expect(Start.Locator("i, em")).ToHaveCountAsync(1);
+        var formatted = await SavedAsync();
+        await SelectAsync(FirstBlock, 0, 6);
+
+        await Tool("Inline code").ClickAsync();
+
+        await Expect(Tool("Inline code")).ToHaveAttributeAsync("aria-pressed", "true");
+        await ShouldHaveNodesAsync(P(Code("a"), Strong(Code("bc")), Em(Code("de")), Code("f")));
+        await SelectAsync(FirstBlock, 0, 6);
+
+        await Tool("Inline code").ClickAsync();
+
+        await Expect(Tool("Inline code")).ToHaveAttributeAsync("aria-pressed", "false");
+        (await SavedAsync()).ShouldBe(formatted);
+    }
+
+    [Theory]
+    // The formatted run in the middle of the code, and at its start; formatted before the code, and inside it after.
+    [InlineData("Bold", 1, false)]
+    [InlineData("Italic", 1, false)]
+    [InlineData("Bold", 0, false)]
+    [InlineData("Italic", 0, false)]
+    [InlineData("Bold", 1, true)]
+    [InlineData("Italic", 1, true)]
+    [InlineData("Bold", 0, true)]
+    [InlineData("Italic", 0, true)]
+    public async Task AfterRemovingCode_TheCursorInFormattedText_IsNotInCode_AndCanMakeItCodeAgain(string format, int at, bool codeFirst)
+    {
+        await OpenEmptyAsync();
+        await Page.Keyboard.TypeAsync("abcdef");
+        if (codeFirst)
+        {
+            await SelectAsync(FirstBlock, 0, 6);
+            await Tool("Inline code").ClickAsync();
+            await Expect(Start.Locator("font")).ToHaveCountAsync(1);
+        }
+
+        await SelectAsync(FirstBlock, at, at + 2);
+        await Tool(format).ClickAsync();
+        await Expect(Start.Locator("b, strong, i, em")).ToHaveCountAsync(1);
+        if (!codeFirst)
+        {
+            await SelectAsync(FirstBlock, 0, 6);
+            await Tool("Inline code").ClickAsync();
+        }
+
+        await Expect(Tool("Inline code")).ToHaveAttributeAsync("aria-pressed", "true");
+        await SelectAsync(FirstBlock, 0, 6);
+        await Tool("Inline code").ClickAsync();
+        await Expect(Tool("Inline code")).ToHaveAttributeAsync("aria-pressed", "false");
+        Func<string[], string> formatted = format == "Bold" ? Strong : Em;
+
+        await PlaceCaretAsync(FirstBlock, at + 1);
+
+        await Expect(Tool(format)).ToHaveAttributeAsync("aria-pressed", "true");
+        await Expect(Tool("Inline code")).ToHaveAttributeAsync("aria-pressed", "false");
+        await Page.Keyboard.TypeAsync("X");
+        var typed = "abcdef".Substring(at, 2).Insert(1, "X");
+        string[] Around(string node) =>
+            [.. at > 0 ? new[] { T("abcdef"[..at]) } : [], node, T("abcdef"[(at + 2)..])];
+        await ShouldHaveNodesAsync(P(Around(formatted([T(typed)]))));
+        await ShouldNotLookLikeCodeOutsideCodeAsync(format);
+
+        await SelectAsync(FirstBlock, at, at + 3);
+        await Tool("Inline code").ClickAsync();
+
+        await ShouldHaveNodesAsync(P(Around(formatted([Code(typed)]))));
     }
 
     [Fact]
@@ -544,11 +827,7 @@ public class SurfaceCommandTests(SampleHost host) : SurfaceTest(host)
         await Page.Keyboard.PressAsync("Enter");
         await Page.Keyboard.TypeAsync("after");
 
-        var saved = await SavedAsync();
-        saved.Length.ShouldBeGreaterThanOrEqualTo(2);
-        ShouldBeNodes([saved[^1]], P(T("after")));
-        saved[..^1].SelectMany(node => JsonNode.Parse(node)!["children"]!.AsArray()).Select(TextOf).ShouldBe(["quoted", "also"]);
-        saved[..^1].ShouldAllBe(node => node.Contains("\"kind\":\"quote\""));
+        await ShouldHaveNodesAsync(Quote(P(T("quoted")), P(T("also"))), P(T("after")));
     }
 
     [Fact]
@@ -650,6 +929,30 @@ public class SurfaceCommandTests(SampleHost host) : SurfaceTest(host)
             TextOf(changed).ShouldBe(TextOf(Nodes(Original("everything"), "prose")[8]));
         }
 
+        (await ErrorCodesAsync(Page)).ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task Tab_CountsTheFormattingInsideCode_AgainstTheDepthLimit()
+    {
+        await OpenEmptyAsync();
+        // As applying bold and italic inside code leaves it. Read as bold around italic around code, so nesting this
+        // item once more would take the list past the limit.
+        await Start.EvaluateAsync(
+            """
+            surface => {
+                surface.innerHTML = '<ul><li>a<ul><li>b</li><li><font face="rt-code"><b><i>c</i></b></font></li></ul></li></ul>';
+                surface.dispatchEvent(new InputEvent('input', { bubbles: true }));
+            }
+            """);
+        var before = await SavedAsync();
+        await PlaceCaretAsync(Start.Locator("li li").Nth(1));
+
+        await Page.Keyboard.PressAsync("Tab");
+
+        await Expect(Start).Not.ToBeFocusedAsync();
+        await Expect(Start.Locator("li li li")).ToHaveCountAsync(0);
+        (await SavedAsync()).ShouldBe(before);
         (await ErrorCodesAsync(Page)).ShouldBeEmpty();
     }
 
@@ -1022,35 +1325,6 @@ public class SurfaceCommandTests(SampleHost host) : SurfaceTest(host)
     }
 
     [Fact]
-    public async Task Paste_FromTheClipboard_TakesOnlyTheText()
-    {
-        await OpenEmptyAsync();
-        await Page.EvaluateAsync("""
-            () => {
-                const source = document.createElement('div');
-                source.id = 'source';
-                source.contentEditable = 'true';
-                const heading = document.createElement('h1');
-                const bold = document.createElement('b');
-                bold.textContent = 'rich words';
-                heading.append(bold);
-                source.append(heading);
-                document.body.append(source);
-            }
-            """);
-        await Page.Locator("#source").ClickAsync();
-        await Page.Keyboard.PressAsync("ControlOrMeta+a");
-        await Page.Keyboard.PressAsync("ControlOrMeta+c");
-        await Start.ClickAsync();
-
-        await Page.Keyboard.PressAsync("ControlOrMeta+v");
-
-        await Expect(Start).ToContainTextAsync("rich words");
-        await Expect(Start.Locator("b, h1")).ToHaveCountAsync(0);
-        await ShouldHaveNodesAsync(P(T("rich words")));
-    }
-
-    [Fact]
     public async Task Drop_IsBlocked()
     {
         await OpenEmptyAsync();
@@ -1195,6 +1469,9 @@ public class SurfaceCommandTests(SampleHost host) : SurfaceTest(host)
     [InlineData("paste")]
     [InlineData("undo")]
     [InlineData("indent")]
+    [InlineData("link-click")]
+    [InlineData("link-enter")]
+    [InlineData("link-remove")]
     public async Task SaveClickedInTheSameTaskAsACommand_HasItsResult(string what)
     {
         await OpenEmptyAsync();
@@ -1216,6 +1493,27 @@ public class SurfaceCommandTests(SampleHost host) : SurfaceTest(host)
             }
         }
 
+        if (what.StartsWith("link", StringComparison.Ordinal))
+        {
+            if (what == "link-remove")
+            {
+                await Tool("Link").ClickAsync();
+                await ApplyLinkAsync("/old");
+                await Expect(Start.Locator("a")).ToHaveCountAsync(1);
+                await PlaceCaretAsync(FirstBlock, 2);
+                await Expect(Tool("Link")).ToHaveAttributeAsync("aria-pressed", "true");
+            }
+
+            await Tool("Link").ClickAsync();
+            if (what != "link-remove")
+            {
+                await LinkAddress.FillAsync("  /same-task  ");
+                // .NET has answered for what is typed.
+                await Expect(Page.GetByRole(AriaRole.Button, new() { Name = "Apply link" }))
+                    .ToHaveAttributeAsync("data-rt-address", "/same-task");
+            }
+        }
+
         await SaveAsync(Page);
         var save = await SaveNumberAsync(Page);
 
@@ -1228,6 +1526,13 @@ public class SurfaceCommandTests(SampleHost host) : SurfaceTest(host)
                     const event = new Event('paste', { bubbles: true, cancelable: true });
                     Object.defineProperty(event, 'clipboardData', { value: { getData: () => 'PASTED\n\nTWICE' } });
                     surface.dispatchEvent(event);
+                } else if (what === 'link-click') {
+                    document.querySelector('[data-rt-link-apply]').click();
+                } else if (what === 'link-enter') {
+                    document.querySelector('.rt-link-box input')
+                        .dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+                } else if (what === 'link-remove') {
+                    document.querySelector('[data-rt-link-remove]').click();
                 } else if (what === 'undo') {
                     document.execCommand('undo');
                 } else {
@@ -1241,7 +1546,16 @@ public class SurfaceCommandTests(SampleHost host) : SurfaceTest(host)
         var nodes = CompactAll(Nodes((await Page.Locator("#saved").TextContentAsync())!, "start"));
         var shown = Canonical((await SavedAsync())[0]);
         Canonical(nodes[0]).ShouldBe(shown);
-        if (what != "undo")
+        if (what.StartsWith("link", StringComparison.Ordinal))
+        {
+            Canonical(nodes[0]).ShouldBe(Canonical(what == "link-remove"
+                ? P(T("first"))
+                : P(Link("/same-task", T("first")))));
+            // The box has closed, and the command ran once.
+            await Expect(LinkAddress).ToHaveCountAsync(0);
+            (await SavedAsync()).Select(Canonical).ShouldBe(nodes.Select(Canonical));
+        }
+        else if (what != "undo")
         {
             shown.ShouldNotBe(Canonical(P(T("first"))));
         }

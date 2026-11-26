@@ -334,6 +334,18 @@ public partial class RichTextSurface
         return Task.CompletedTask;
     }
 
+    /// <summary>Told that the script has made or removed the link the link box asked for. For the script only.</summary>
+    [JSInvokable]
+    public Task LinkApplied()
+    {
+        if (!_disposed)
+        {
+            Session?.CompleteLink(this);
+        }
+
+        return Task.CompletedTask;
+    }
+
     /// <summary>Runs a writing command where the cursor was last in this surface.</summary>
     internal Task CommandAsync(string name, string argument) =>
         _ready && !_disposed && _module is { } module

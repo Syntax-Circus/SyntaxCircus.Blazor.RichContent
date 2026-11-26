@@ -27,6 +27,11 @@ internal sealed class WritingSession
         }
     }
 
+    /// <summary>Raised when the script has applied what the link box asked for.</summary>
+    public event Action<RichTextSurface>? LinkApplied;
+
+    public void CompleteLink(RichTextSurface surface) => LinkApplied?.Invoke(surface);
+
     public void Report(RichTextSurface surface, SurfaceSelection selection)
     {
         if (ReferenceEquals(surface, Surface) && selection == Selection)

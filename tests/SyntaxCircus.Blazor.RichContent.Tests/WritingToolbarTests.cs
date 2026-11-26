@@ -167,6 +167,38 @@ public sealed class WritingToolbarTests : IDisposable
         }
     }
 
+    [Theory]
+    [InlineData("  /page  ", 2048, "/page")]
+    [InlineData("", 2048, "")]
+    [InlineData("javascript:alert(1)", 2048, null)]
+    [InlineData("https://example.com/long/address", 20, null)]
+    public async Task TheApplyButton_CarriesTheAddress_OnlyOnceItIsAccepted(string typed, int limit, string? accepted)
+    {
+        var editor = Render(RichContentLimits.Default with { UrlCharacters = limit });
+        await Report(editor, At(link: "/old"));
+        editor.FindAll("[role=toolbar] button").Single(button => button.TextContent == "Link").Click();
+
+        editor.Find(".rt-link-box input").Input(typed);
+
+        var apply = editor.Find("[data-rt-link-apply]");
+        apply.GetAttribute("data-rt-address").ShouldBe(accepted);
+        apply.GetAttribute("data-rt-checked").ShouldBe(accepted is null ? null : typed);
+    }
+
+    [Fact]
+    public async Task ALinkTheScriptApplied_ClosesTheBox_AndIsNotRunAgain()
+    {
+        var editor = Render();
+        await Report(editor, At());
+        var surface = editor.FindComponent<RichTextSurface>().Instance;
+        await editor.InvokeAsync(surface.LinkRequested);
+
+        await editor.InvokeAsync(surface.LinkApplied);
+
+        editor.FindAll(".rt-link-box").ShouldBeEmpty();
+        Commands().ShouldBeEmpty();
+    }
+
     [Fact]
     public async Task TheKeyboardRequest_OpensTheBox_ForTheSurfaceWithTheCursorOnly()
     {

@@ -338,17 +338,30 @@ function readInline(run, textOf) {
             case 'EM':
                 wrap({ kind: 'emphasis' }, children());
                 return;
-            case 'FONT':
-            case 'CODE': {
-                if (tagOf(node) === 'FONT' && node.getAttribute('face') !== CODE_FACE) {
-                    break;
+            case 'FONT': {
+                const face = node.getAttribute('face');
+                if (face === CODE_FACE) {
+                    // A command can leave formatting and links inside code, which the model only has around it. Each
+                    // run of text is made code where it is.
+                    out.push(...codeRuns(children()));
+                    return;
                 }
 
+                // Taking code away from part of a stretch of it can leave another face inside it. The innermost face
+                // is the one that counts, so what is in this one is not code.
+                if (face !== null && isInCode(node)) {
+                    wrap({ kind: PLAIN }, children());
+                    return;
+                }
+
+                break;
+            }
+            case 'CODE': {
                 const content = children();
                 // The model has no link inside code. A command can put code around one, which then has to hold the
                 // code instead, or its address would be lost.
                 if (!withinLink && node.querySelector('a')) {
-                    out.push(...content.map(asCode));
+                    out.push(...codeRuns(content));
                     return;
                 }
 
@@ -379,14 +392,31 @@ function readInline(run, textOf) {
 
 const plainText = node => node.text ?? (node.children ?? []).map(plainText).join('');
 
-// The node with each run of text in it made code, keeping the formatting and links around the runs.
-const asCode = node => {
-    if (node.kind === 'text') {
-        return { kind: 'inlineCode', text: node.text };
+// While code is being read, what is inside it but not code. Never leaves the reader.
+const PLAIN = 'plain';
+
+const isInCode = element => element.parentElement?.closest('code, font[face]')?.matches(CODE_SELECTOR) === true;
+
+const withoutPlain = nodes => merged(nodes.flatMap(node => {
+    if (node.kind === PLAIN) {
+        return withoutPlain(node.children);
     }
 
-    return node.children ? { ...node, children: node.children.map(asCode) } : node;
-};
+    return [node.children ? { ...node, children: withoutPlain(node.children) } : node];
+}));
+
+// The nodes with each run of text in them made code, keeping the formatting and links around the runs.
+const codeRuns = nodes => merged(nodes.flatMap(node => {
+    if (node.kind === PLAIN) {
+        return withoutPlain(node.children);
+    }
+
+    if (node.kind === 'text') {
+        return node.text === '' ? [] : [{ kind: 'inlineCode', text: node.text }];
+    }
+
+    return [node.children ? { ...node, children: codeRuns(node.children) } : node];
+}));
 
 // Only the white space HTML collapses, so a stored U+00A0 counts as content.
 const isBlank = inline => inline.every(node => node.kind === 'text' && /^[ \t\r\n\f]*$/.test(node.text));

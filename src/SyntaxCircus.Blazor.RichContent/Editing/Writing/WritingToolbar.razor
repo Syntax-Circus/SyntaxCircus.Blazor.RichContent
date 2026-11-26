@@ -7,8 +7,8 @@
 
 @* The script runs the buttons that carry data-rt-command, in the click itself, so that what they change is on its way
    before anything clicked afterwards. Only the link goes through here, to have its address checked. *@
-<div class="rt-toolbar-area">
-  <div @ref="_element" class="rt-toolbar" role="toolbar" aria-label="Formatting" data-rt-toolbar>
+<div @ref="_area" class="rt-toolbar-area">
+  <div class="rt-toolbar" role="toolbar" aria-label="Formatting" data-rt-toolbar>
     @Toggle("bold", "Bold", "B", "Control+B Meta+B", CanFormat, Selection?.Bold)
     @Toggle("italic", "Italic", "I", "Control+I Meta+I", CanFormat, Selection?.Italic)
     @Toggle("code", "Inline code", "<>", "Control+E Meta+E", CanFormat, Selection?.Code)
@@ -26,12 +26,13 @@
   </div>
   @if (_linkTarget is not null)
   {
-    <div class="rt-link-box" role="group" aria-label="Link">
+    <div @key="_linkOpening" class="rt-link-box" role="group" aria-label="Link">
       <label>Link address
-        <input @ref="_linkInput" type="text" inputmode="url" autocomplete="off" @bind="_address" @bind:event="oninput" @onkeydown="LinkKeyAsync" />
+        <input @ref="_linkInput" data-rt-link-input type="text" inputmode="url" autocomplete="off" @bind="_address" @bind:event="oninput" @onkeydown="LinkKeyAsync" />
       </label>
-      <button type="button" @onclick="ApplyLinkAsync">Apply link</button>
-      <button type="button" @onclick="() => CloseLinkAsync(string.Empty)">Remove link</button>
+      @* Once the address as typed has been accepted, the script can apply it in the click itself. *@
+      <button type="button" data-rt-link-apply data-rt-checked="@(CheckedAddress is null ? null : _address)" data-rt-address="@CheckedAddress" @onclick="ApplyLinkAsync">Apply link</button>
+      <button type="button" data-rt-link-remove @onclick="() => CloseLinkAsync(string.Empty)">Remove link</button>
       <button type="button" @onclick="() => CloseLinkAsync(null)">Cancel</button>
       @if (_refused)
       {
@@ -42,7 +43,7 @@
 </div>
 
 @code {
-  private ElementReference _element;
+  private ElementReference _area;
   private ElementReference _linkInput;
   private IJSObjectReference? _module;
   private WritingSession? _subscribed;
@@ -50,6 +51,7 @@
   private string _address = "";
   private bool _refused;
   private bool _focusLinkInput;
+  private int _linkOpening;
   private bool _disposed;
 
   [CascadingParameter] private WritingSession? Session { get; set; }
@@ -81,6 +83,7 @@
     {
       _subscribed.Changed += SessionChanged;
       _subscribed.LinkRequested += LinkRequested;
+      _subscribed.LinkApplied += LinkApplied;
     }
   }
 
@@ -106,11 +109,13 @@
         }
 
         _module = module;
-        await module.InvokeVoidAsync("attachToolbar", _element);
+        await module.InvokeVoidAsync("attachToolbar", _area);
       });
     }
 
-    if (_focusLinkInput && _linkTarget is not null)
+    // This can be an earlier render completing, with the box not drawn yet: Blazor holds renders back while too many
+    // are unacknowledged. The input has a reference only once it has been drawn.
+    if (_focusLinkInput && _linkTarget is not null && _linkInput.Id is not null)
     {
       _focusLinkInput = false;
       await InteropAsync(async () => await _linkInput.FocusAsync());
@@ -128,6 +133,16 @@
     StateHasChanged();
   }
 
+  // The script has applied the link itself. Only the box is left to close.
+  private void LinkApplied(RichTextSurface surface)
+  {
+    if (ReferenceEquals(surface, _linkTarget))
+    {
+      _linkTarget = null;
+      StateHasChanged();
+    }
+  }
+
   private void LinkRequested()
   {
     OpenLink();
@@ -139,6 +154,13 @@
     if (!CanFormat)
     {
       return;
+    }
+
+    if (_linkTarget is null)
+    {
+      // A new box each time it opens, so that drawing it gives a new reference to its input.
+      _linkOpening++;
+      _linkInput = default;
     }
 
     _linkTarget = Session!.Surface;
@@ -154,11 +176,19 @@
     _ => Task.CompletedTask,
   };
 
-  // An empty address removes the link.
+  // What the typed address would be linked as, or null if it may not be. An empty address removes the link.
+  private string? CheckedAddress
+  {
+    get
+    {
+      var address = _address.Trim();
+      return address.Length == 0 || RichContentUrl.IsSafe(address, Session!.Limits.UrlCharacters) ? address : null;
+    }
+  }
+
   private Task ApplyLinkAsync()
   {
-    var address = _address.Trim();
-    if (address.Length > 0 && !RichContentUrl.IsSafe(address, Session!.Limits.UrlCharacters))
+    if (CheckedAddress is not { } address)
     {
       _refused = true;
       return Task.CompletedTask;
@@ -214,6 +244,7 @@
     {
       _subscribed.Changed -= SessionChanged;
       _subscribed.LinkRequested -= LinkRequested;
+      _subscribed.LinkApplied -= LinkApplied;
     }
 
     if (_module is { } module)
