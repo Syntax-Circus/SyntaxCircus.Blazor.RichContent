@@ -28,12 +28,38 @@ function flush(surface) {
     }
 }
 
+// Only a surface that holds a generation, having been drawn in full, can be typed into.
+function applyState(surface) {
+    const { element } = surface;
+    const drawn = surface.generation !== null;
+    const editable = drawn && !surface.disabled;
+    element.contentEditable = editable ? 'true' : 'false';
+    element.setAttribute('aria-disabled', editable ? 'false' : 'true');
+    if (drawn) {
+        element.setAttribute('data-rt-ready', 'true');
+    } else {
+        element.removeAttribute('data-rt-ready');
+    }
+}
+
+// The surface holds the new generation only once all of this has succeeded. If any of it throws, the surface holds
+// none: whatever is on screen could not be delivered, so it takes no typing and sends nothing, .NET is never told
+// that the redraw arrived, and the same redraw can be tried again.
 function render(surface, keyedNodes, generation) {
+    try {
+        buildSurface(surface.element, keyedNodes, surface.inline);
+        surface.reader.adopt();
+        // The baseline is the DOM as read back, not the stored nodes, so what the reader normalises is not a change.
+        surface.transport.reset(generation, surface.reader.read());
+    } catch (error) {
+        surface.generation = null;
+        surface.transport.reset(null, []);
+        applyState(surface);
+        throw error;
+    }
+
     surface.generation = generation;
-    buildSurface(surface.element, keyedNodes, surface.inline);
-    surface.reader.adopt();
-    // The baseline is the DOM as read back, not the stored nodes, so what the reader normalises is not a change.
-    surface.transport.reset(generation, surface.reader.read());
+    applyState(surface);
 }
 
 const RECONNECT_STATES = ['show', 'failed', 'rejected', 'paused', 'resume-failed'];
@@ -76,14 +102,16 @@ function endComposition(surface) {
     surface.composing = false;
     const pending = surface.pending;
     surface.pending = null;
-    if (pending) {
-        // The content was replaced while the author was composing, and the replacement wins.
-        render(surface, pending.keyedNodes, pending.generation);
-    } else {
-        flush(surface);
+    try {
+        if (pending) {
+            // The content was replaced while the author was composing, and the replacement wins.
+            render(surface, pending.keyedNodes, pending.generation);
+        } else {
+            flush(surface);
+        }
+    } finally {
+        compositionChanged(surface, false);
     }
-
-    compositionChanged(surface, false);
 }
 
 export function attach(element, dotNetRef, options) {
@@ -99,8 +127,9 @@ export function attach(element, dotNetRef, options) {
         inline,
         composing: false,
         pending: null,
-        // Of the content shown. Null until the first redraw.
+        // Of the content shown. Null until it has been drawn in full.
         generation: null,
+        disabled: false,
         listeners: new AbortController(),
         reader: createReader(element, inline),
     };
@@ -169,16 +198,15 @@ export function attach(element, dotNetRef, options) {
 // With force, redraws the surface from keyedNodes ([{ key, node }]) of the given generation, unless it already
 // has that generation: .NET sends a redraw again when it cannot tell that it arrived, and by then the author may
 // have typed. Without force, the content is left alone and only disabled is applied. Returns the generation the
-// surface then has, or null if there is no surface.
+// surface then has, which is null if there is no surface or none has been drawn. Throws if drawing fails.
+// data-rt-ready is set while the surface has drawn content.
 export function sync(element, keyedNodes, disabled, force, generation) {
     const surface = element && surfaces.get(element);
     if (!surface) {
         return null;
     }
 
-    element.contentEditable = disabled ? 'false' : 'true';
-    element.setAttribute('aria-disabled', disabled ? 'true' : 'false');
-
+    surface.disabled = disabled;
     if (force && generation !== surface.generation) {
         if (surface.composing) {
             // Rewriting the element now would break the composition.
@@ -188,7 +216,7 @@ export function sync(element, keyedNodes, disabled, force, generation) {
         }
     }
 
-    element.setAttribute('data-rt-ready', 'true');
+    applyState(surface);
     return surface.generation;
 }
 

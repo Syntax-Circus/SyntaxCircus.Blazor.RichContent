@@ -459,6 +459,61 @@ public sealed class WriteModeTests : IDisposable
     }
 
     [Theory]
+    [InlineData("attach")]
+    [InlineData("first draw")]
+    public void AScriptThatFailsBeforeTheFirstDraw_IsReported_AndNoLongerUsed(string step)
+    {
+        if (step == "attach")
+        {
+            _module.SetupVoid("attach", _ => true).SetException(new JSException("attach failed"));
+        }
+        else
+        {
+            SetOutcome(1, "throws");
+        }
+
+        var editor = Render(TwoBlocks());
+
+        editor.FindAll(".rt-surface-failed").Count.ShouldBe(3);
+        editor.FindAll("[data-rt-surface]").ShouldBeEmpty();
+        _errors.Entries.OfType<JSException>().Count().ShouldBe(3);
+        var syncs = _module.Invocations["sync"].Count;
+        editor.Render(parameters => parameters.Add(e => e.Disabled, true));
+        _module.Invocations["sync"].Count.ShouldBe(syncs);
+        Faulted.ShouldBeFalse();
+    }
+
+    [Theory]
+    // However far the surface got before it was disposed.
+    [InlineData("attach threw")]
+    [InlineData("attach was cancelled")]
+    [InlineData("first draw threw")]
+    public async Task ADisposalCallThatThrows_OnASurfaceThatNeverBecameReady_DoesNotThrow(string history)
+    {
+        switch (history)
+        {
+            case "attach threw":
+                _module.SetupVoid("attach", _ => true).SetException(new JSException("attach failed"));
+                break;
+            case "attach was cancelled":
+                _module.SetupVoid("attach", _ => true).SetCanceled();
+                break;
+            default:
+                SetOutcome(1, "throws");
+                break;
+        }
+
+        _module.SetupVoid("dispose", _ => true).SetException(new JSException("dispose failed"));
+        var editor = Render(TwoBlocks());
+        var surface = editor.FindComponents<RichTextSurface>()[0].Instance;
+
+        await editor.InvokeAsync(async () => await surface.DisposeAsync());
+
+        _errors.Entries.OfType<JSException>().Select(e => e.Message).ShouldContain("dispose failed");
+        Faulted.ShouldBeFalse();
+    }
+
+    [Theory]
     [InlineData("cancelled")]
     [InlineData("disconnected")]
     public void AnAttachThatDoesNotArrive_DoesNotFaultTheCircuit(string outcome)

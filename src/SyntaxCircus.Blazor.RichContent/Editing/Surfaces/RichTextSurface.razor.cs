@@ -106,6 +106,7 @@ public partial class RichTextSurface
         }
         catch (JSException exception)
         {
+            _ready = false;
             Logger.LogError(exception, "The writing surface's script could not be loaded or run.");
             // A seam for falling back to the block editor when the script cannot be loaded or run.
             _loadFailed = true;
@@ -170,7 +171,7 @@ public partial class RichTextSurface
 
     private void Confirm(int generation) => _confirmedGeneration = Math.Max(_confirmedGeneration, generation);
 
-    private ValueTask SynchronizeAsync(bool redraw) => Interop(() => SyncAsync(redraw));
+    private ValueTask SynchronizeAsync(bool redraw) => LoggingScriptErrors(() => SyncAsync(redraw));
 
     private async Task SendRedrawAgainAsync()
     {
@@ -185,8 +186,22 @@ public partial class RichTextSurface
         }
     }
 
-    // A lost connection, a call given up on or a component on its way out must not end the circuit. A script that
-    // threw is a defect: it is logged as an error, but the author's other work is worth more than the circuit.
+    // For calls on a surface that has started, and for disposal. A script that threw is a defect: it is logged as
+    // an error, but the author's other work is worth more than the circuit. Starting a surface does not use this,
+    // so that a surface that cannot start says so.
+    private async ValueTask LoggingScriptErrors(Func<ValueTask> call)
+    {
+        try
+        {
+            await Interop(call);
+        }
+        catch (JSException exception)
+        {
+            Logger.LogError(exception, "A call to the writing surface's script failed.");
+        }
+    }
+
+    // A lost connection, a call given up on or a component on its way out must not end the circuit.
     private async ValueTask Interop(Func<ValueTask> call)
     {
         try
@@ -202,10 +217,6 @@ public partial class RichTextSurface
         }
         catch (ObjectDisposedException) when (_disposed)
         {
-        }
-        catch (JSException exception) when (_ready)
-        {
-            Logger.LogError(exception, "A call to the writing surface's script failed.");
         }
     }
 
@@ -333,8 +344,8 @@ public partial class RichTextSurface
             if (_module is { } module)
             {
                 // Separately, so that one failing does not leave the other undone.
-                await Interop(() => module.InvokeVoidAsync("dispose", _element));
-                await Interop(module.DisposeAsync);
+                await LoggingScriptErrors(() => module.InvokeVoidAsync("dispose", _element));
+                await LoggingScriptErrors(module.DisposeAsync);
             }
         }
         finally
