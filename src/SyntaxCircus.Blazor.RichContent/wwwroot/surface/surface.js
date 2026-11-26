@@ -7,6 +7,7 @@ import {
     selectionState, surfaceFocused, surfaceLeft, wireToolbar,
 } from './commands.js';
 import { childAtEnd, wireInsert } from './insert.js';
+import { freeze, isFrozen, whenThawed, wireFreeze } from './freeze.js';
 
 const surfaces = new Map();
 
@@ -51,6 +52,7 @@ function release(surface) {
     surface.transport.dispose();
     surfaces.delete(surface.element);
     delete surface.element.richContentSurface;
+    delete surface.element.richContentRefresh;
 }
 
 // An element that was removed can no longer be passed in, so its surface is found this way.
@@ -73,7 +75,7 @@ function flush(surface) {
 function applyState(surface) {
     const { element } = surface;
     const drawn = surface.generation !== null;
-    const editable = drawn && !surface.disabled;
+    const editable = isEditable(surface);
     element.contentEditable = editable ? 'true' : 'false';
     element.setAttribute('aria-disabled', editable ? 'false' : 'true');
     if (drawn) {
@@ -132,7 +134,8 @@ export function callDotNet(dotNetRef, method, ...args) {
         : dotNetRef.invokeMethodAsync(method, ...args);
 }
 
-const isEditable = surface => surface.generation !== null && !surface.disabled;
+// Not while the editor is being rearranged: see freeze.js.
+const isEditable = surface => surface.generation !== null && !surface.disabled && !isFrozen(surface.element);
 
 // The author is in this surface (again): the toolbar acts on it.
 function entered(surface) {
@@ -420,6 +423,7 @@ export function attach(element, dotNetRef, options) {
     surfaces.set(element, surface);
     // For tests.
     element.richContentSurface = surface;
+    element.richContentRefresh = () => applyState(surface);
 }
 
 // With force, redraws the surface from keyedNodes ([{ key, node }]) of the given generation, unless it already
@@ -458,8 +462,12 @@ export function command(element, name, argument = '') {
 // Gives the surface the focus again, with the selection it last had.
 export function restore(element) {
     const surface = element && surfaces.get(element);
-    if (surface && activate(surface)) {
-        report(surface);
+    if (surface) {
+        whenThawed(element, () => {
+            if (surfaces.get(element) === surface && activate(surface)) {
+                report(surface);
+            }
+        });
     }
 }
 
@@ -492,15 +500,17 @@ function insert(element, choice) {
     const after = surface.reader.keyThrough(childAtEnd(element, range));
     const sent = surface.transport.newest;
     // This surface is about to be rewritten, or the author's attention to go to what is inserted. So nothing more is
-    // typed here, where it could be lost, and the toolbar lets go of it.
+    // typed here, or anywhere in the editor until the result is drawn, and the toolbar lets go of it.
     leave(surface);
     element.blur();
+    freeze(element.closest('[data-rt-editor]'));
     callDotNet(surface.dotNetRef, 'InsertRequested', choice, after, sent).catch(() => {});
 }
 
-// area holds the toolbar and, while it is open, the link box.
-export function attachToolbar(area) {
+// area holds the toolbar and, while it is open, the link box. toolbarRef is the toolbar's component.
+export function attachToolbar(area, toolbarRef) {
     if (area) {
+        wireFreeze(area, number => callDotNet(toolbarRef, 'Redraw', number), isReconnecting);
         wireToolbar(area, { run: command, restore, link });
         wireInsert(area, choice => {
             const element = activeSurface(area.closest('[data-rt-editor]'));

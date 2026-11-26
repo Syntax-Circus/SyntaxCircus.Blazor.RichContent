@@ -5,6 +5,7 @@
 
 import { createTransport } from './transport.js';
 import { callDotNet } from './surface.js';
+import { isFrozen, whenThawed } from './freeze.js';
 
 const INDENT = '    ';
 
@@ -17,6 +18,7 @@ function release(card) {
     card.transport.dispose();
     cards.delete(card.element);
     delete card.element.richContentCode;
+    delete card.element.richContentRefresh;
 }
 
 // An element that was removed can no longer be passed in, so its card is found this way.
@@ -35,7 +37,8 @@ function flush(card) {
     }
 }
 
-const isEditable = card => card.generation !== null && !card.disabled;
+// Not while the editor is being rearranged: see freeze.js.
+const isEditable = card => card.generation !== null && !card.disabled && !isFrozen(card.element);
 
 // Only a text area that has been filled can be typed into. Anything else it holds could not be delivered.
 function applyState(card) {
@@ -190,6 +193,7 @@ export function attach(element, dotNetRef) {
     cards.set(element, card);
     // For tests.
     element.richContentCode = card;
+    element.richContentRefresh = () => applyState(card);
 }
 
 // With force, sets the text of the given generation, unless the card already has that generation: .NET sends a
@@ -217,8 +221,12 @@ export function sync(element, text, disabled, force, generation) {
 
 export function focus(element) {
     const card = element && cards.get(element);
-    if (card && isEditable(card)) {
-        element.focus();
+    if (card) {
+        whenThawed(element, () => {
+            if (cards.get(element) === card && isEditable(card)) {
+                element.focus();
+            }
+        });
     }
 }
 

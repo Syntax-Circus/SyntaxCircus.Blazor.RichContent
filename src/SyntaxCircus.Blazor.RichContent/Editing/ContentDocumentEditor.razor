@@ -27,15 +27,15 @@
                 <header>
                     <strong>@TitleOf(block)</strong>
                     <div class="actions">
-                        <button type="button" disabled="@(Disabled || index == 0)" @onclick="() => MoveBlock(index, block, -1)">Move up</button>
-                        <button type="button" disabled="@(Disabled || index == Blocks.Length - 1)" @onclick="() => MoveBlock(index, block, 1)">Move down</button>
+                        <button type="button" data-rt-rearrange disabled="@(Disabled || index == 0)" @onclick="() => MoveBlock(index, block, -1)">Move up</button>
+                        <button type="button" data-rt-rearrange disabled="@(Disabled || index == Blocks.Length - 1)" @onclick="() => MoveBlock(index, block, 1)">Move down</button>
                         @if (Mode == RichContentEditorMode.Write && block is not RichTextBlock)
                         {
                             <RemoveButton Label="Remove" Text="Remove" Disabled="Disabled" NeedsConfirmation="() => HoldsSomething(index, block)" Confirmed="() => RemoveBlock(index, block)" />
                         }
                         else
                         {
-                            <button type="button" disabled="@Disabled" @onclick="() => RemoveBlock(index, block)">Remove</button>
+                            <button type="button" data-rt-rearrange disabled="@Disabled" @onclick="() => RemoveBlock(index, block)">Remove</button>
                         }
                     </div>
                 </header>
@@ -102,7 +102,7 @@
                 @foreach (var choice in Choices.Where(c => includeText || !c.IsText))
                 {
                     var blocked = choice.NeedsMedia && !HasMediaPicker;
-                    <button type="button" disabled="@(Disabled || blocked)" title="@(blocked ? "No media picker is configured." : null)" @onclick="() => insert(choice.Create())">@choice.Label</button>
+                    <button type="button" data-rt-rearrange disabled="@(Disabled || blocked)" title="@(blocked ? "No media picker is configured." : null)" @onclick="() => insert(choice.Create())">@choice.Label</button>
                 }
             </div>
         </details>;

@@ -14,9 +14,11 @@ namespace SyntaxCircus.Blazor.RichContent.Editing.Writing;
 public partial class WritingBlock
 {
     // A stretch of the node list. The object is the component key, so it outlives edits that change its length.
-    private sealed class Part(WritingBlock owner, SegmentKind kind) : IInsertPlace
+    private sealed class Part(WritingBlock owner, SegmentKind kind) : IInsertPlace, IWritingPart
     {
         public SegmentKind Kind { get; } = kind;
+
+        public bool IsGone { get; set; }
 
         public int Count { get; set; }
 
@@ -182,6 +184,13 @@ public partial class WritingBlock
         if (_parts.Exists(part => !kept.Contains(part) && part.Surface is { HasRejectedEdit: true }))
         {
             return false;
+        }
+
+        // The components of the parts left out stay alive until a render, which can be held back. From here on
+        // nothing they send can be stored, so none of it may be acknowledged.
+        foreach (var part in _parts.Where(part => !kept.Contains(part)))
+        {
+            part.IsGone = true;
         }
 
         Commit(nodes, plan);

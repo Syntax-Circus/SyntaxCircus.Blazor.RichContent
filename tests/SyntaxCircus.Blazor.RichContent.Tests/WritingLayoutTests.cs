@@ -363,19 +363,198 @@ public sealed class WritingLayoutTests : IDisposable
         _changes.ShouldBe(0);
     }
 
-    [Fact]
-    public async Task WhatIsTypedInAnOldSurface_AfterAnInsert_CannotUndoTheSplit()
+    // A patch that gives one of the surface's nodes other text and keeps all the others.
+    private static string Retype(string[] keys, int node, string text) => JsonSerializer.Serialize(
+        new SurfacePatch(1, keys, [new KeyedNode(keys[node], new SurfaceNode("paragraph", Children: [new SurfaceNode("text", Text: text)]))]),
+        JsonSerializerOptions.Web);
+
+    [Theory]
+    // Which surface is typed into, and which of its nodes. Each action rewrites that surface and moves the node.
+    [InlineData("insert", 0, 1, new[] { "a", "code", "b", "code", "c" })]
+    [InlineData("insert-block", 0, 1, new[] { "a" })]
+    [InlineData("move", 0, 1, new[] { "a", "code", "b", "c" })]
+    [InlineData("remove", 1, 0, new[] { "a", "b", "c" })]
+    public async Task WhatAnOldSurfaceSends_BeforeItHasBeenDrawnAway_IsNeitherStoredNorAcknowledged(
+        string action, int surfaceIndex, int node, string[] expected)
     {
-        var editor = Render(Document(Rich("one", Paragraph("a"), Paragraph("b"))));
+        // Called by the host while it takes the rearranged document: nothing has been drawn again yet, as when
+        // Blazor holds renders back, and the old surface is still there.
+        Func<Task>? whileUndrawn = null;
+        var editor = _context.Render<ContentDocumentEditor>(parameters => parameters
+            .Add(e => e.Document, Document(Rich("one", Paragraph("a"), Paragraph("b"), CodeNode("code"), Paragraph("c"))))
+            .Add(e => e.Mode, RichContentEditorMode.Write)
+            .Add(e => e.DocumentChanged, changed =>
+            {
+                _stored = changed;
+                _changes++;
+                var probe = whileUndrawn;
+                whileUndrawn = null;
+                probe?.Invoke();
+            }));
+        var old = editor.FindComponents<RichTextSurface>()[surfaceIndex].Instance;
+        var keys = Keys(surfaceIndex);
+        bool? acknowledged = null;
+        whileUndrawn = () =>
+        {
+            var answer = old.ReceiveEdit(1, 0, 1, Retype(keys, node, "typed"));
+            acknowledged = answer.IsCompletedSuccessfully && answer.Result;
+            return Task.CompletedTask;
+        };
+
+        switch (action)
+        {
+            case "insert":
+                await editor.InvokeAsync(() => old.InsertRequested(0, keys[0], 0));
+                break;
+            case "insert-block":
+                await editor.InvokeAsync(() => old.InsertRequested(4, keys[0], 0));
+                break;
+            case "move":
+                CardButton(editor, "code", "Move up").Click();
+                break;
+            default:
+                CardButton(editor, "code", "Remove").Click();
+                ConfirmButton(editor, "Yes").Click();
+                break;
+        }
+
+        acknowledged.ShouldBe(false, "the browser must not take it to be saved");
+        _changes.ShouldBe(1, "nothing of it reaches the document");
+        ((RichTextBlock)_stored!.Blocks[0]).Nodes
+            .Select(n => n.Kind == Kind.CodeBlock ? (n.Text == "" ? "code" : n.Text) : n.Children[0].Text)
+            .ShouldBe(expected, "no node is duplicated, restored or lost");
+    }
+
+    [Fact]
+    public async Task AnEditSentToADisposedComponent_IsNotAcknowledged()
+    {
+        var editor = Render(Document(Rich("one", Paragraph("a"))));
         var surface = editor.FindComponent<RichTextSurface>().Instance;
         var keys = Keys(0);
-        await editor.InvokeAsync(() => surface.InsertRequested(0, keys[0], 0));
+        await editor.InvokeAsync(async () => await surface.DisposeAsync());
 
-        // As would arrive if the browser had not yet heard of the split.
-        var patch = JsonSerializer.Serialize(new SurfacePatch(1, keys, []), JsonSerializerOptions.Web);
-        await editor.InvokeAsync(() => surface.ReceiveEdit(1, 0, 1, patch));
+        (await editor.InvokeAsync(() => surface.ReceiveEdit(1, 0, 1, Retype(keys, 0, "late")))).ShouldBeFalse();
 
-        StoredKinds().ShouldBe(["Paragraph", "CodeBlock", "Paragraph"]);
+        _changes.ShouldBe(0);
+    }
+
+    private static CtaBlock Cta() => new("cta", "Heading", "Body", "Label", "https://example.com/");
+
+    private static GalleryBlock Gallery() => new("gallery", [new GalleryImage(new MediaRef("mountains"), "Alt", null)], "Title");
+
+    // The host keeps what it is given but passes nothing back down, as while renders are held back: each field's
+    // handler was drawn for the block as it was.
+    private static void TypeInto(IRenderedComponent<ContentDocumentEditor> editor, string block, int field, string text) =>
+        editor.FindAll($"[data-block-id={block}] input[type=text], [data-block-id={block}] textarea")[field].Input(text);
+
+    [Fact]
+    public void ACallToActionInWriteMode_BuildsEachEditOnTheLast_AndAReplacementWins()
+    {
+        var editor = Render(Document(Rich("one", Paragraph("a")), Cta()));
+
+        TypeInto(editor, "cta", 0, "New heading");
+        TypeInto(editor, "cta", 1, "New body");
+        TypeInto(editor, "cta", 2, "New label");
+        TypeInto(editor, "cta", 3, "/new");
+
+        _stored!.Blocks[1].ShouldBe(new CtaBlock("cta", "New heading", "New body", "New label", "/new"));
+
+        var replaced = Cta() with { Heading = "From the host" };
+        editor.Render(parameters => parameters.Add(e => e.Document, Document(Rich("one", Paragraph("a")), replaced)));
+        TypeInto(editor, "cta", 2, "After");
+
+        _stored!.Blocks[1].ShouldBe(replaced with { Label = "After" });
+    }
+
+    [Fact]
+    public void AGalleryInWriteMode_BuildsEachEditOnTheLast_AndAReplacementWins()
+    {
+        var editor = Render(Document(Rich("one", Paragraph("a")), Gallery()));
+
+        TypeInto(editor, "gallery", 0, "New title");
+        TypeInto(editor, "gallery", 1, "New alt");
+        TypeInto(editor, "gallery", 2, "New caption");
+
+        var stored = (GalleryBlock)_stored!.Blocks[1];
+        stored.Title.ShouldBe("New title");
+        stored.Images.ShouldHaveSingleItem().ShouldBe(new GalleryImage(new MediaRef("mountains"), "New alt", "New caption"));
+
+        var replaced = Gallery() with { Title = "From the host" };
+        editor.Render(parameters => parameters.Add(e => e.Document, Document(Rich("one", Paragraph("a")), replaced)));
+        TypeInto(editor, "gallery", 1, "After");
+
+        stored = (GalleryBlock)_stored!.Blocks[1];
+        stored.Title.ShouldBe("From the host");
+        stored.Images.ShouldHaveSingleItem().Alt.ShouldBe("After");
+        stored.Images[0].Caption.ShouldBeNull();
+    }
+
+    [Fact]
+    public void ACallToActionInBlocksMode_ComposesOnItsParameter_AsBefore()
+    {
+        ContentDocument? stored = null;
+        var editor = _context.Render<ContentDocumentEditor>(parameters => parameters
+            .Add(e => e.Document, Document(Cta()))
+            .Add(e => e.DocumentChanged, changed => stored = changed));
+
+        TypeInto(editor, "cta", 0, "New heading");
+        TypeInto(editor, "cta", 2, "New label");
+
+        stored!.Blocks[0].ShouldBe(Cta() with { Label = "New label" });
+    }
+
+    private static Dictionary<string, JsonElement> Future(string name) =>
+        new() { [name] = JsonSerializer.SerializeToElement(new { kept = name }) };
+
+    private static string Json(RichTextNode node) => JsonSerializer.Serialize(node, ContentDocumentSerializer.Options);
+
+    [Fact]
+    public async Task CodeImageAndTableNodesWithUnknownProperties_AreLocked_AndStayByteIdentical()
+    {
+        var cell = Cell("c") with { Extra = Future("onCell") };
+        RichTextNode[] unknown =
+        [
+            CodeNode("kept code") with { Extra = Future("onCode") },
+            ImageNode("kept image") with { Extra = Future("onImage") },
+            TableNode(Row(Cell("a"))) with { Extra = Future("onTable") },
+            TableNode(Row(Cell("b")) with { Extra = Future("onRow") }),
+            TableNode(Row(Cell("a"), cell)),
+        ];
+        var before = unknown.Select(Json).ToArray();
+        var editor = Render(Document(Rich("one", [Paragraph("first"), .. unknown, CodeNode("plain"), Paragraph("last")])));
+        void ShouldBeKept() => ((RichTextBlock)_stored!.Blocks[0]).Nodes
+            .Where(n => unknown.Contains(n, ReferenceEqualityComparer.Instance)).Select(Json).Order().ShouldBe(before.Order());
+        void ShouldKeepDrawing() => editor.Render(parameters => parameters.Add(e => e.Document, _stored!));
+
+        editor.FindAll("[data-rt-card=locked]").Count.ShouldBe(unknown.Length);
+        editor.FindAll("[data-rt-card=table], [data-rt-card=image]").ShouldBeEmpty();
+        editor.FindAll("[data-rt-card=locked] input, [data-rt-card=locked] textarea, [data-rt-card=locked] [data-rt-surface]")
+            .ShouldBeEmpty();
+
+        // A neighbouring edit.
+        var surface = editor.FindComponents<RichTextSurface>()[0].Instance;
+        await editor.InvokeAsync(() => surface.ReceiveEdit(1, 0, 1, Retype(Keys(0), 0, "first, edited")));
+        ShouldBeKept();
+        ShouldKeepDrawing();
+
+        // Insert beside the first of them, through the surface before it.
+        var first = editor.FindComponents<RichTextSurface>()[0].Instance;
+        await editor.InvokeAsync(() => first.InsertRequested(2, Keys(0)[0], 1));
+        ShouldBeKept();
+        ShouldKeepDrawing();
+
+        // Move each of them, then remove a neighbour.
+        for (var i = 0; i < unknown.Length; i++)
+        {
+            editor.FindAll("[data-rt-card=locked] button[aria-label='Move down']")[i].Click();
+            ShouldBeKept();
+            ShouldKeepDrawing();
+        }
+
+        CardButton(editor, "code", "Remove").Click();
+        ConfirmButton(editor, "Yes").Click();
+        ShouldBeKept();
+        ((RichTextBlock)_stored!.Blocks[0]).Nodes.Count(n => n.Kind == Kind.CodeBlock).ShouldBe(1);
     }
 
     [Fact]
@@ -515,7 +694,7 @@ public sealed class WritingLayoutTests : IDisposable
 
         await editor.InvokeAsync(async () => await card.DisposeAsync());
 
-        (await editor.InvokeAsync(() => card.ReceiveEdit(1, 0, 1, CodePatch(1, "late")))).ShouldBeTrue();
+        (await editor.InvokeAsync(() => card.ReceiveEdit(1, 0, 1, CodePatch(1, "late")))).ShouldBeFalse();
         _changes.ShouldBe(0);
         _context.Renderer.UnhandledException.IsCompleted.ShouldBeFalse();
     }

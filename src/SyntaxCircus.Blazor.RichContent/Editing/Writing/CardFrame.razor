@@ -3,8 +3,8 @@
   <div class="rt-card-header">
     <strong>@Title</strong>
     <div class="actions">
-      <button type="button" aria-label="Move up" title="Move up" disabled="@(Disabled || !CanMoveUp)" @onclick="() => Moved.InvokeAsync(-1)">↑</button>
-      <button type="button" aria-label="Move down" title="Move down" disabled="@(Disabled || !CanMoveDown)" @onclick="() => Moved.InvokeAsync(1)">↓</button>
+      <button type="button" aria-label="Move up" title="Move up" data-rt-rearrange disabled="@(Disabled || !CanMoveUp)" @onclick="() => Moved.InvokeAsync(-1)">↑</button>
+      <button type="button" aria-label="Move down" title="Move down" data-rt-rearrange disabled="@(Disabled || !CanMoveDown)" @onclick="() => Moved.InvokeAsync(1)">↓</button>
       <RemoveButton Label="Remove" Text="✕" Disabled="Disabled" NeedsConfirmation="NeedsConfirmation" Confirmed="Removed" />
     </div>
   </div>

@@ -13,31 +13,35 @@
     if (current.Kind == SegmentKind.Surface)
     {
       <CascadingValue @key="current" TValue="IInsertPlace" Value="current" IsFixed="true">
-        <RichTextSurface @ref="current.Surface" Nodes="nodes" NodesChanged="changed => SurfaceChanged(current, changed)" Disabled="Disabled" Label="@Label" />
+        <CascadingValue TValue="IWritingPart" Value="current" IsFixed="true">
+          <RichTextSurface @ref="current.Surface" Nodes="nodes" NodesChanged="changed => SurfaceChanged(current, changed)" Disabled="Disabled" Label="@Label" />
+        </CascadingValue>
       </CascadingValue>
     }
     else
     {
       var node = nodes[0];
-      <CardFrame @key="current" Kind="@current.Kind.ToString().ToLowerInvariant()" Title="@NameOf(current.Kind)" Disabled="Disabled"
-                 CanMoveUp="first > 0" CanMoveDown="first < _nodes.Length - 1" Moved="delta => MoveCard(current, delta)"
-                 Removed="() => RemoveCard(current)" NeedsConfirmation="() => HoldsSomething(current)">
-        @switch (current.Kind)
-        {
-          case SegmentKind.Code:
-            <CodeCard Node="node" NodeChanged="changed => CardChanged(current, changed)" Disabled="Disabled" FocusOnStart="ReferenceEquals(node, _inserted)" />
-            break;
-          case SegmentKind.Image:
-            <ImageCard Node="node" NodeChanged="changed => CardChanged(current, changed)" Disabled="Disabled" FocusOnStart="ReferenceEquals(node, _inserted)" />
-            break;
-          case SegmentKind.Table:
-            <TableCard Node="node" NodeChanged="changed => CardChanged(current, changed)" Disabled="Disabled" FocusOnStart="ReferenceEquals(node, _inserted)" />
-            break;
-          default:
-            <LockedCard Node="node" />
-            break;
-        }
-      </CardFrame>
+      <CascadingValue @key="current" TValue="IWritingPart" Value="current" IsFixed="true">
+        <CardFrame Kind="@current.Kind.ToString().ToLowerInvariant()" Title="@NameOf(current.Kind)" Disabled="Disabled"
+                   CanMoveUp="first > 0" CanMoveDown="first < _nodes.Length - 1" Moved="delta => MoveCard(current, delta)"
+                   Removed="() => RemoveCard(current)" NeedsConfirmation="() => HoldsSomething(current)">
+          @switch (current.Kind)
+          {
+            case SegmentKind.Code:
+              <CodeCard Node="node" NodeChanged="changed => CardChanged(current, changed)" Disabled="Disabled" FocusOnStart="ReferenceEquals(node, _inserted)" />
+              break;
+            case SegmentKind.Image:
+              <ImageCard Node="node" NodeChanged="changed => CardChanged(current, changed)" Disabled="Disabled" FocusOnStart="ReferenceEquals(node, _inserted)" />
+              break;
+            case SegmentKind.Table:
+              <TableCard Node="node" NodeChanged="changed => CardChanged(current, changed)" Disabled="Disabled" FocusOnStart="ReferenceEquals(node, _inserted)" />
+              break;
+            default:
+              <LockedCard Node="node" />
+              break;
+          }
+        </CardFrame>
+      </CascadingValue>
     }
   }
 </div>

@@ -9,7 +9,7 @@
 @* The script runs the buttons that carry data-rt-command or data-rt-insert, in the click itself, so that what they
    change is on its way before anything clicked afterwards. Only the link goes through here, to have its address
    checked. *@
-<div @ref="_area" class="rt-toolbar-area" data-rt-toolbar-area>
+<div @ref="_area" class="rt-toolbar-area" data-rt-toolbar-area data-rt-drawn="@_drawn">
   <div class="rt-toolbar" role="toolbar" aria-label="Formatting" data-rt-toolbar>
     @Toggle("bold", "Bold", "B", "Control+B Meta+B", CanFormat, Selection?.Bold)
     @Toggle("italic", "Italic", "I", "Control+I Meta+I", CanFormat, Selection?.Italic)
@@ -69,6 +69,9 @@
   // The surface the Insert menu was opened for.
   private RichTextSurface? _insertTarget;
   private bool _disposed;
+  private DotNetObjectReference<WritingToolbar>? _self;
+  // The latest number the script asked to see, which tells it that what came before has been drawn. See freeze.js.
+  private long _drawn;
 
   [CascadingParameter] private WritingSession? Session { get; set; }
 
@@ -134,7 +137,8 @@
         }
 
         _module = module;
-        await module.InvokeVoidAsync("attachToolbar", _area);
+        _self = DotNetObjectReference.Create(this);
+        await module.InvokeVoidAsync("attachToolbar", _area, _self);
       });
     }
 
@@ -145,6 +149,23 @@
       _focusLinkInput = false;
       await InteropAsync(async () => await _linkInput.FocusAsync());
     }
+  }
+
+  /// <summary>
+  /// Draws <paramref name="number"/> into the toolbar, so that the script can tell that the page shows everything
+  /// done before this was asked. For the script only.
+  /// </summary>
+  [JSInvokable]
+  public Task Redraw(long number)
+  {
+    if (!_disposed)
+    {
+      // In the same render queue as whatever came before, and so never drawn ahead of it.
+      _drawn = number;
+      StateHasChanged();
+    }
+
+    return Task.CompletedTask;
   }
 
   private void SessionChanged()
@@ -282,5 +303,7 @@
     {
       await InteropAsync(async () => await module.DisposeAsync());
     }
+
+    _self?.Dispose();
   }
 }

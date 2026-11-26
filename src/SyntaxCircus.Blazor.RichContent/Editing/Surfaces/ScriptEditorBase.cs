@@ -2,6 +2,7 @@
 using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.Logging;
 using Microsoft.JSInterop;
+using SyntaxCircus.Blazor.RichContent.Editing.Writing;
 
 namespace SyntaxCircus.Blazor.RichContent.Editing.Surfaces;
 
@@ -27,6 +28,9 @@ public abstract class ScriptEditorBase : ComponentBase, IAsyncDisposable
     private protected ScriptEditorBase()
     {
     }
+
+    // The part of a writing block that this edits, or is inside, such as a table cell. Absent outside one.
+    [CascadingParameter] private IWritingPart? WritingPart { get; set; }
 
     /// <summary>The element the script edits. The component's markup captures it.</summary>
     private protected ElementReference Element { get; set; }
@@ -205,9 +209,11 @@ public abstract class ScriptEditorBase : ComponentBase, IAsyncDisposable
     [JSInvokable]
     public Task<bool> ReceiveEdit(long sequence, int index, int count, string chunk)
     {
-        if (IsDisposed)
+        // A component that has gone, or whose place is being rearranged, can store nothing. The edit must not be
+        // acknowledged: the browser would take it to be saved.
+        if (IsDisposed || WritingPart?.IsGone == true)
         {
-            return Task.FromResult(true);
+            return Task.FromResult(false);
         }
 
         Func<Task>? deliver = null;
