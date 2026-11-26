@@ -101,9 +101,10 @@ public sealed class PageWatch
 
     private readonly IBrowserContext _context;
     private readonly ConcurrentQueue<PageFailure> _failures = new();
-    private readonly ConcurrentQueue<Task> _negotiations = new();
     private readonly ConcurrentDictionary<string, string> _connectionIdsByToken = new(StringComparer.Ordinal);
     private volatile bool _outage;
+    // Kept so that ending an outage removes this route alone, and not the one that reads negotiations.
+    private readonly Func<IRoute, Task> _refuse = route => route.AbortAsync();
 
     private PageWatch(IBrowserContext context) => _context = context;
 
@@ -118,13 +119,7 @@ public sealed class PageWatch
             }
         };
         context.WebError += (_, error) => watch.Add(new(PageFailureKind.PageError, error.Error));
-        context.Response += (_, response) =>
-        {
-            if (new Uri(response.Url).AbsolutePath.EndsWith("/_blazor/negotiate", StringComparison.Ordinal))
-            {
-                watch._negotiations.Enqueue(watch.ReadNegotiationAsync(response));
-            }
-        };
+        await context.RouteAsync(NegotiateRoute, watch.PassNegotiationAsync);
         await context.ExposeFunctionAsync<string, string, bool>(ReportBinding, (kind, detail) =>
         {
             watch.Add(new(Enum.Parse<PageFailureKind>(kind), detail));
@@ -156,7 +151,6 @@ public sealed class PageWatch
     internal async Task<IReadOnlyList<string>> OpenConnectionIdsAsync(IPage page)
     {
         var tokens = await page.EvaluateAsync<string[]>("() => window.__pageWatch?.openTokens() ?? []");
-        await Task.WhenAll(_negotiations);
         return
         [
             .. tokens.Select(token => _connectionIdsByToken.TryGetValue(token, out var id)
@@ -165,21 +159,38 @@ public sealed class PageWatch
         ];
     }
 
-    // The socket's address carries the connection token; the server's log names the connection id.
-    private async Task ReadNegotiationAsync(IResponse response)
+    // The socket's address carries the connection token; the server's log names the connection id. The answer that
+    // pairs them is read here on its way to the page, so it is known before the page can open the socket. Reading the
+    // browser's copy afterwards is not reliable: Chromium does not always still have the body.
+    private async Task PassNegotiationAsync(IRoute route)
     {
         try
         {
-            if (await response.JsonAsync() is { } body
+            IAPIResponse response;
+            try
+            {
+                response = await route.FetchAsync();
+            }
+            catch (PlaywrightException)
+            {
+                // The server gave no answer. The page's request fails, as it would have without this route.
+                await route.AbortAsync("connectionrefused");
+                return;
+            }
+
+            if (response.Ok
+                && await response.JsonAsync() is { } body
                 && body.TryGetProperty("connectionToken", out var token)
                 && body.TryGetProperty("connectionId", out var id))
             {
                 _connectionIdsByToken[token.GetString()!] = id.GetString()!;
             }
+
+            await route.FulfillAsync(new() { Response = response });
         }
         catch (PlaywrightException)
         {
-            // The page left before the body was read, so there will be no socket to look up.
+            // The page or its context went while the request was on its way, so there is no one left to answer.
         }
     }
 
@@ -194,7 +205,8 @@ public sealed class PageWatch
         await FlushAsync();
         var instance = await InstanceAsync(page);
         _outage = true;
-        await _context.RouteAsync(NegotiateRoute, route => route.AbortAsync());
+        // The route added last is the one asked first.
+        await _context.RouteAsync(NegotiateRoute, _refuse);
         await page.EvaluateAsync("() => window.__pageWatch.closeSockets()");
         // Wait until Blazor has noticed too. It hides this dialog again only once it has rejoined its circuit.
         await page.WaitForFunctionAsync($"() => window.__pageWatch.openSockets() === 0 && ({ReconnectDialogShows})");
@@ -245,7 +257,7 @@ public sealed class PageWatch
         /// </summary>
         public async Task RestoreAsync()
         {
-            await _watch._context.UnrouteAsync(NegotiateRoute);
+            await _watch._context.UnrouteAsync(NegotiateRoute, _watch._refuse);
             await _page.WaitForFunctionAsync(
                 $"() => window.__pageWatch.openSockets() > 0 && !({ReconnectDialogShows})",
                 null,

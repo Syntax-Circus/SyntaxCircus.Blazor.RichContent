@@ -13,7 +13,8 @@ All notable changes to this project are documented here. Format loosely follows
   shown as a "Preserved content" card. Only the top-level nodes the author changes are rebuilt.
 - `ContentDocumentEditor.Mode` (`RichContentEditorMode.Blocks`, the default, or `Write`), bindable through
   `ModeChanged`, and `ShowModeSwitch` (default `true`).
-- `RichTextSurface` (with `RichTextSurfaceProfile`), a writing surface that extension editors can use.
+- `RichTextSurface` (with `RichTextSurfaceProfile`), the writing surface, public so that extension editors can try it.
+  That use is experimental: no browser test hosts it inside an extension editor in Write mode.
 - The error code `surface-unconvertible` in `ErrorsChanged`: something on screen is not in the document. Hosts should
   block saving while it is there.
 - `RichTextEditorOperations.SetTableHeaderRow`.
@@ -45,7 +46,7 @@ See the README's "Write mode" section before turning it on. In short:
 - With a Content-Security-Policy, allow style attributes (`style-src-attr 'unsafe-inline'`, or `'unsafe-inline'` in
   `style-src`).
 - Do not override fonts inside `[data-rt-surface]` with `!important`; keep `"rt-code"` first in a code font you set
-  there.
+  there, and give code there no box, colour or size, global `code` rules of your page included.
 - The editor sets `defaultParagraphSeparator`, which applies to the whole document.
 - If you raise `UrlCharacters` above 4000: on a stored link longer than 4000 characters, the Write mode link box
   applies no address, and can only remove the link. Edit such a link in Blocks mode.
@@ -58,6 +59,14 @@ See the README's "Write mode" section before turning it on. In short:
 - In Firefox, earlier undo history is lost after the editor has been `Disabled` and enabled again.
 - The toolbar does not use a roving tab index. After answering "No" to "Remove?", focus is not returned to the button.
 - Table rows and columns are added and removed at the end only, and rows cannot be moved in Write mode.
+- A non-breaking space typed or pasted into a surface becomes an ordinary space; a stored one that is deleted and
+  brought back is kept only if the text around it is as it was.
+- With a monospace editor font, inline code looks like the text around it while editing.
+- Formatting or a link left wrapped around a whole block is not kept.
+- A rearrangement freezes text areas and text, URL, search, number and email inputs only. Other controls, including
+  those in extension editors, stay writable, and a change made in one then can be lost.
+- While part of the editor is briefly frozen, Ctrl/Cmd+Z and Y in the editor or with nothing focused, and Backspace
+  with nothing focused, are cancelled.
 
 ### Not verified
 

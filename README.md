@@ -258,7 +258,8 @@ Blocks mode.
 
 An extension block's editor receives `Disabled`; **pass it on to any script-edited surface your editor contains**
 (such as a `RichTextSurface`). The editor does not wait, at a mode switch, for a surface that was not given
-`Disabled`, and such a surface stays writable while the editor is `Disabled`.
+`Disabled`, and such a surface stays writable while the editor is `Disabled`. A `RichTextSurface` inside an extension
+editor is experimental: no browser test hosts one there in Write mode.
 
 ### Keyboard
 
@@ -331,7 +332,9 @@ editing, inline code is shown as `font[face="rt-code"]`. If you change the code 
 inline code by its font alone. **Do not add rules inside `[data-rt-surface]` that give `code` or
 `font[face="rt-code"]` a box (a background, border, outline, shadow or padding) or change its colour or size:** they
 also reach plain text that Firefox keeps nested inside a code element, which would then look like code although it is
-stored as plain text. Text taken out of code while
+stored as plain text. **This includes your page's global rules that reach into a surface**, such as a CSS framework's
+`code { background: ...; color: ...; padding: ... }`. If you have one, scope it away from surfaces or undo it inside
+`[data-rt-surface]`. Text taken out of code while
 editing can be left inside the code element (Firefox does this). The editor then shows it in the surface's own font,
 as it was when the surface last got the focus. Until the text is redrawn, a separate font that you set only for
 headings, links or quotes does not apply to it.
@@ -343,13 +346,28 @@ headings, links or quotes does not apply to it.
 
 ### Components and API
 
-The supported API for hosts is `ContentDocumentEditor` (with `Mode`, `ModeChanged` and `ShowModeSwitch`),
-`RichContentEditorMode`, and, for extension editors that want a writing surface, `RichTextSurface` (`Nodes`,
-`NodesChanged`, `Disabled`, `FocusOnStart`, `Label`, `Profile` with `RichTextSurfaceProfile`; its nodes must be ones a
-surface can edit, and `NodesChanged` handlers have the same store-before-await rule). Other public types in the
+The supported API for hosts is `ContentDocumentEditor` (with `Mode`, `ModeChanged` and `ShowModeSwitch`) and
+`RichContentEditorMode`. `RichTextSurface` (`Nodes`, `NodesChanged`, `Disabled`, `FocusOnStart`, `Label`, `Profile`
+with `RichTextSurfaceProfile`; its nodes must be ones a surface can edit, and `NodesChanged` handlers have the same
+store-before-await rule) is public so that extension editors can try a writing surface of their own. **That use is
+experimental:** no browser test hosts it inside an extension editor in Write mode. Other public types in the
 `Editing.Surfaces` and `Editing.Writing` namespaces (cards, the toolbar, `WritingBlock`, `InsertChoice`,
 `ScriptEditorBase`, `SurfaceSelection`) are the editor's own parts. They are public because Razor components are, and
 may change in any version. Their `[JSInvokable]` methods are for the package's scripts only.
+
+### Known limitations
+
+- A non-breaking space you type or paste into a surface becomes an ordinary space. Stored ones are kept, but one that is
+  deleted and brought back is recognised only if the text around it is also as it was.
+- Inline code is marked while editing by its font alone, so **if your editor's own font is monospace, inline code looks
+  like the text around it.** The toolbar's Inline code button still shows it at the cursor.
+- If an editing operation leaves formatting or a link wrapped around a whole paragraph or other block, the wrapper is
+  not kept: the text is stored without it.
+- During a rearrangement the editor makes text areas and text, URL, search, number and email inputs read-only,
+  including those in extension editors. **Other controls are not frozen** (checkboxes, radio buttons, selects, other
+  input types and custom editors of your own), so what is changed in one then can be lost.
+- While part of the editor is briefly frozen, Ctrl/Cmd+Z and Ctrl/Cmd+Y pressed in the editor or with nothing focused,
+  and Backspace with nothing focused, are cancelled.
 
 ### Browsers, and what has not been verified
 
@@ -499,6 +517,14 @@ var limits = RichContentLimits.Default with { Blocks = 50, TextBytes = 64 * 1024
 
 `samples/RichContent.Sample` in the repository is a runnable Blazor Server app with an editor, a live preview, a media
 picker and a `project-card` extension block. It is not packed.
+
+## Maintaining
+
+CI runs the browser tests on Chromium only, and a merge to `main` publishes. **Before releasing a change to styles
+(`.css` files, or the styles the surface script adds), run the browser tests on WebKit too:** CSS that is harmless
+elsewhere can make large edits very slow there. Set `RICHCONTENT_BROWSER=webkit` (or `firefox`) and run
+`dotnet test --project tests/SyntaxCircus.Blazor.RichContent.BrowserTests -c Release`, after installing that browser
+with the `playwright.ps1` script in the test project's build output.
 
 ## License
 
