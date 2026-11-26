@@ -23,6 +23,27 @@ function exec(command, value = null) {
     }
 }
 
+// Takes back the step recorded by a command whose result is not what was wanted; before is the surface's markup from
+// just before that command. A browser can answer that a command ran and yet record no step, and the undo then takes
+// back what came before, perhaps the author's typing. That shows as markup that is not what it was, and is redone.
+function takeBack(root, before) {
+    if (root.innerHTML === before) {
+        return;
+    }
+
+    let undone = false;
+    const note = () => {
+        undone = true;
+    };
+    document.addEventListener('input', note, true);
+    exec('undo');
+    document.removeEventListener('input', note, true);
+    // With no input event nothing was undone, and a redo would bring back what the author had undone.
+    if (undone && root.innerHTML !== before) {
+        exec('redo');
+    }
+}
+
 // ---- Text blocks and places in them ----
 
 const TEXT_BLOCKS = 'p,div,h2,h3,h4,li,blockquote';
@@ -369,6 +390,7 @@ function replaceList(root, list, copy) {
     // The serialization of a copy of what is in the surface: its text came from text nodes.
     const markup = copy.outerHTML;
     select(range);
+    const before = root.innerHTML;
     if (!exec('insertHTML', markup)) {
         return false;
     }
@@ -379,7 +401,7 @@ function replaceList(root, list, copy) {
         return true;
     }
 
-    exec('undo');
+    takeBack(root, before);
     return false;
 }
 
@@ -467,7 +489,8 @@ function setLink(root, url) {
         const saved = saveSelection(root);
         links.forEach(link => unlink(root, link));
         restoreSelection(root, saved);
-        return links.length > 0;
+        // With no link there, there is nothing to remove, and what was asked is done.
+        return true;
     }
 
     if (links.length === 1 && (range.collapsed || selectedTexts(root, range).every(text => links[0].contains(text)))) {
@@ -691,6 +714,7 @@ function quoteAsParagraphs(root) {
     const wanted = textsOf(paragraphs);
     const text = paragraphs.map(paragraph => paragraph.textContent).join('');
     const saved = saveSelection(root);
+    const unquoted = root.innerHTML;
     if (!exec('formatBlock', 'blockquote')) {
         return false;
     }
@@ -702,7 +726,7 @@ function quoteAsParagraphs(root) {
     const range = selectionIn(root);
     const quote = range && closestWithin(root, range.startContainer, 'blockquote');
     if (!quote || quote.textContent !== text) {
-        exec('undo');
+        takeBack(root, unquoted);
         return false;
     }
 
@@ -711,11 +735,12 @@ function quoteAsParagraphs(root) {
     // The serialization of copies of what was in the surface.
     const markup = serialized(paragraphs);
     select(inside);
+    const quoted = root.innerHTML;
     exec('insertHTML', markup);
     if (!quote.isConnected || textsOf(quote.children) !== wanted
         || [...quote.childNodes].some(child => child.nodeName !== 'P')) {
-        exec('undo');
-        exec('undo');
+        takeBack(root, quoted);
+        takeBack(root, unquoted);
         return false;
     }
 

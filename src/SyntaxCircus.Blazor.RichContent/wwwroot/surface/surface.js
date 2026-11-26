@@ -242,7 +242,8 @@ function leaveIfElsewhere(surface, target) {
 
     const inside = editor.contains(target);
     const part = target.closest('[data-rt-surface], [data-rt-toolbar-area]');
-    if (inside ? !part || !editor.contains(part) : target.closest(FIELDS) !== null) {
+    // This editor's own parts: those of an editor nested in it, as in an extension block, are another place.
+    if (inside ? part?.closest('[data-rt-editor]') !== editor : target.closest(FIELDS) !== null) {
         leave(surface);
     }
 }
@@ -589,9 +590,10 @@ export function restore(element) {
 // Makes or removes a link as the link box asked, with an address .NET has already accepted, then has .NET close the
 // box. Called in the click or key press, so that the edit leaves before anything the author clicks next.
 function link(element, address) {
-    command(element, 'link', address);
     const surface = surfaces.get(element);
-    if (surface) {
+    // Where the command does not run, as while the editor is rearranged or text is composed, the box stays open with
+    // the address.
+    if (command(element, 'link', address)) {
         // With the connection down the box stays open.
         callDotNet(surface.dotNetRef, 'LinkApplied').catch(() => {});
     }

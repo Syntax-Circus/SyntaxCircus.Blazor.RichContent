@@ -1181,6 +1181,328 @@ public class SurfaceCommandTests(SampleHost host) : SurfaceTest(host)
         (await CommandAsync(Start, "link", "javascript:alert(1)")).ShouldBeFalse();
     }
 
+    [Theory]
+    [InlineData("frozen", true)]
+    [InlineData("frozen", false)]
+    [InlineData("composing", true)]
+    [InlineData("composing", false)]
+    public async Task ALinkThatCannotBeMadeYet_LeavesTheBoxOpen_WithTheAddress(string why, bool enter)
+    {
+        await OpenEmptyAsync();
+        await Page.Keyboard.TypeAsync("text");
+        await SelectAsync(FirstBlock, 0, 4);
+        await Tool("Link").ClickAsync();
+        await LinkAddress.FillAsync("/kept");
+        var apply = Page.GetByRole(AriaRole.Button, new() { Name = "Apply link" });
+        await Expect(apply).ToHaveAttributeAsync("data-rt-address", "/kept");
+        // The surface takes no command: the editor is being rearranged, or text is being composed in it.
+        await Start.EvaluateAsync(
+            """
+            (surface, why) => {
+                if (why === 'frozen') {
+                    surface.closest('[data-rt-editor]').richContentFreeze.frozen = true;
+                } else {
+                    surface.dispatchEvent(new CompositionEvent('compositionstart'));
+                }
+            }
+            """, why);
+
+        await PressApplyAsync();
+
+        // A round trip, by the end of which a box that was told to close has gone.
+        await SaveAsync(Page);
+        await SaveAsync(Page);
+        await Expect(LinkAddress).ToHaveValueAsync("/kept");
+        await Expect(Start.Locator("a")).ToHaveCountAsync(0);
+
+        await Start.EvaluateAsync(
+            """
+            (surface, why) => {
+                if (why === 'frozen') {
+                    surface.closest('[data-rt-editor]').richContentFreeze.frozen = false;
+                } else {
+                    surface.dispatchEvent(new CompositionEvent('compositionend'));
+                }
+            }
+            """, why);
+        await PressApplyAsync();
+
+        await Expect(LinkAddress).ToHaveCountAsync(0);
+        await ShouldHaveNodesAsync(P(Link("/kept", T("text"))));
+
+        Task PressApplyAsync() => enter ? LinkAddress.PressAsync("Enter") : apply.ClickAsync();
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task RemovingALink_WhereThereIsNone_ClosesTheBox(bool button)
+    {
+        await OpenEmptyAsync();
+        await Page.Keyboard.TypeAsync("text");
+        await SelectAsync(FirstBlock, 0, 4);
+        await Tool("Link").ClickAsync();
+        await Expect(LinkAddress).ToHaveValueAsync("");
+
+        if (button)
+        {
+            await Page.GetByRole(AriaRole.Button, new() { Name = "Remove link" }).ClickAsync();
+        }
+        else
+        {
+            await LinkAddress.PressAsync("Enter");
+        }
+
+        await Expect(LinkAddress).ToHaveCountAsync(0);
+        await ShouldHaveNodesAsync(P(T("text")));
+    }
+
+    // ---- Taking a step back ----
+
+    // Stands in for one call of one of the browser's commands. "nothing" and "unrecorded" answer that it ran without
+    // leaving an undo step, the second having changed the page all the same. "wrong" runs it for real, so that a step is
+    // recorded, but with a result that is not the one asked for. Notes what the surface held at that call, and every
+    // undo and redo from then on.
+    private async Task StandInAsync(string command, string how) => await Start.EvaluateAsync(
+        """
+        (surface, [command, how]) => {
+            const real = document.execCommand.bind(document);
+            window.steps = [];
+            window.held = null;
+            document.execCommand = (name, ui, value) => {
+                if (window.held !== null && (name === 'undo' || name === 'redo')) {
+                    window.steps.push(name);
+                }
+
+                if (window.held !== null || name !== command || (command === 'formatBlock' && value !== 'blockquote')) {
+                    return real(name, ui, value);
+                }
+
+                window.held = surface.innerHTML;
+                if (how === 'wrong') {
+                    return real(name, ui, command === 'formatBlock' ? 'h4' : value.replace('beta', 'beXta'));
+                }
+
+                if (how === 'unrecorded') {
+                    const stray = document.createElement('p');
+                    stray.textContent = 'stray';
+                    const into = command === 'insertHTML'
+                        ? surface.querySelector('blockquote') : null;
+                    if (into) {
+                        into.append(stray);
+                    } else if (surface.querySelector('ul')) {
+                        const item = document.createElement('li');
+                        item.textContent = 'stray';
+                        surface.querySelector('ul').append(item);
+                    } else {
+                        surface.append(stray);
+                    }
+                }
+
+                return true;
+            };
+        }
+        """, new[] { command, how });
+
+    private Task<string[]> StepsAsync() => Page.EvaluateAsync<string[]>("() => window.steps");
+
+    private void SkipWhereQuotesAreIndented(string what) => Assert.SkipWhen(
+        what.StartsWith("quote", StringComparison.Ordinal) && Host.Browser.BrowserType.Name == "firefox",
+        "Firefox quotes by indenting, which takes no step back.");
+
+    // The author's typing is the step before the command's. A command that left none must not have it undone.
+    private async Task ArrangeAsync(string what)
+    {
+        await OpenEmptyAsync();
+        switch (what)
+        {
+            case "indent" or "paste":
+                await Tool("Bulleted list").ClickAsync();
+                await Page.Keyboard.TypeAsync("alpha");
+                await Page.Keyboard.PressAsync("Enter");
+                await Page.Keyboard.TypeAsync("beta typed");
+                break;
+            case "outdent":
+                await Tool("Bulleted list").ClickAsync();
+                await Page.Keyboard.TypeAsync("alpha");
+                await Page.Keyboard.PressAsync("Enter");
+                await Page.Keyboard.PressAsync("Tab");
+                await Page.Keyboard.TypeAsync("beta typed");
+                break;
+            case "quote-heading" or "quote-lines-heading":
+                await StyleSelect.SelectOptionAsync("h2");
+                await Start.ClickAsync();
+                await Page.Keyboard.TypeAsync("beta typed");
+                break;
+            case "quote-formatted":
+                await Page.Keyboard.TypeAsync("alpha bold");
+                await SelectAsync(FirstBlock, 6, 10);
+                await Tool("Bold").ClickAsync();
+                await PlaceCaretAsync(FirstBlock);
+                await Page.Keyboard.PressAsync("Enter");
+                await Page.Keyboard.TypeAsync("beta typed");
+                await SelectAsync(Start, 0, -1);
+                break;
+            default:
+                await Page.Keyboard.TypeAsync("beta typed");
+                break;
+        }
+    }
+
+    private async Task RunAsync(string what)
+    {
+        switch (what)
+        {
+            case "indent":
+                await Page.Keyboard.PressAsync("Tab");
+                break;
+            case "outdent":
+                await Page.Keyboard.PressAsync("Shift+Tab");
+                break;
+            case "paste":
+                await PasteAsync(" one\n\ntwo");
+                break;
+            default:
+                await Tool("Quote").ClickAsync();
+                break;
+        }
+    }
+
+    [Theory]
+    [InlineData("indent", "insertHTML", "nothing")]
+    [InlineData("indent", "insertHTML", "unrecorded")]
+    [InlineData("outdent", "insertHTML", "unrecorded")]
+    [InlineData("paste", "insertHTML", "unrecorded")]
+    [InlineData("quote", "formatBlock", "nothing")]
+    [InlineData("quote", "formatBlock", "unrecorded")]
+    [InlineData("quote-heading", "formatBlock", "unrecorded")]
+    [InlineData("quote-lines", "insertHTML", "nothing")]
+    [InlineData("quote-lines", "insertHTML", "unrecorded")]
+    [InlineData("quote-lines-heading", "insertHTML", "unrecorded")]
+    public async Task ACommandThatLeftNoUndoStep_DoesNotUndoWhatCameBeforeIt(string what, string command, string how)
+    {
+        SkipWhereQuotesAreIndented(what);
+        await ArrangeAsync(what);
+        await StandInAsync(command, how);
+
+        await RunAsync(what);
+
+        await Page.WaitForFunctionAsync("() => window.held !== null");
+        await Expect(Start).ToContainTextAsync("beta typed");
+        var shown = await Start.InnerTextAsync();
+        var saved = string.Concat(Nodes(await SaveAsync(Page), "start").Select(TextOf));
+        saved.ShouldContain("beta typed", customMessage: shown);
+    }
+
+    [Theory]
+    [InlineData("indent", "insertHTML")]
+    [InlineData("outdent", "insertHTML")]
+    [InlineData("paste", "insertHTML")]
+    [InlineData("quote", "formatBlock")]
+    [InlineData("quote-heading", "formatBlock")]
+    [InlineData("quote", "insertHTML")]
+    [InlineData("quote-formatted", "insertHTML")]
+    [InlineData("quote-lines-heading", "insertHTML")]
+    public async Task ACommandWithTheWrongResult_IsTakenBack_AndNotRedone(string what, string command)
+    {
+        SkipWhereQuotesAreIndented(what);
+        await ArrangeAsync(what);
+        await StandInAsync(command, "wrong");
+
+        await RunAsync(what);
+
+        await Page.WaitForFunctionAsync("() => window.held !== null");
+        var steps = await StepsAsync();
+        steps.ShouldNotContain("redo");
+        // A quote is made in two steps, and both are taken back.
+        steps.ShouldBe(what.StartsWith("quote", StringComparison.Ordinal) && command == "insertHTML" ? ["undo", "undo"] : ["undo"]);
+        await Expect(Start).ToContainTextAsync("beta typed");
+        await Expect(Start).Not.ToContainTextAsync("beXta");
+        // The paste goes on to put its text in as a single line.
+        if (what != "paste" && !(what.StartsWith("quote", StringComparison.Ordinal) && command == "insertHTML"))
+        {
+            (await Start.InnerHTMLAsync()).ShouldBe(await Page.EvaluateAsync<string>("() => window.held"));
+        }
+
+        await ShouldBeStoredAsShownAsync();
+    }
+
+    // ---- A nested editor ----
+
+    [Fact]
+    public async Task AnEditorInsideAnother_HasItsOwnToolbar_AndTheOuterOneLetsGo()
+    {
+        await OpenFixtureAsync("empty");
+        await Page.EvaluateAsync(
+            """
+            async () => {
+                const module = await import('/_content/SyntaxCircus.Blazor.RichContent/surface/surface.js');
+                window.left = [];
+                const make = name => {
+                    const editor = document.createElement('div');
+                    editor.setAttribute('data-rt-editor', '');
+                    const area = document.createElement('div');
+                    area.setAttribute('data-rt-toolbar-area', '');
+                    const toolbar = document.createElement('div');
+                    toolbar.setAttribute('data-rt-toolbar', '');
+                    const bold = document.createElement('button');
+                    bold.type = 'button';
+                    bold.textContent = `${name} bold`;
+                    bold.dataset.rtCommand = 'bold';
+                    toolbar.append(bold);
+                    area.append(toolbar);
+                    const surface = document.createElement('div');
+                    surface.id = name;
+                    surface.setAttribute('data-rt-surface', 'prose');
+                    editor.append(area, surface);
+                    return { name, editor, area, surface };
+                };
+                const outer = make('outer');
+                const inner = make('inner');
+                // As in an extension block of the outer editor.
+                const block = document.createElement('div');
+                block.append(inner.editor);
+                outer.editor.append(block);
+                document.body.append(outer.editor);
+                for (const { name, surface, area } of [outer, inner]) {
+                    module.attach(surface, {
+                        invokeMethodAsync(method) {
+                            if (method === 'SurfaceLeft') window.left.push(name);
+                            return Promise.resolve(true);
+                        },
+                    }, { profile: 'prose' });
+                    const node = { kind: 'paragraph', children: [{ kind: 'text', text: `${name} text` }] };
+                    module.sync(surface, [{ key: name, node }], false, true, 1);
+                    module.attachToolbar(area, {
+                        invokeMethodAsync(method, number) {
+                            area.setAttribute('data-rt-drawn', number);
+                            return Promise.resolve();
+                        },
+                    }, name);
+                }
+            }
+            """);
+        var outer = Page.Locator("#outer");
+        var inner = Page.Locator("#inner");
+        await Expect(outer).ToHaveAttributeAsync("contenteditable", "true");
+        await Expect(Page.Locator("#outer:not([inert]), #inner:not([inert])")).ToHaveCountAsync(2);
+        await SelectAsync(outer.Locator("p"), 0, 5);
+
+        await PlaceCaretAsync(inner.Locator("p"), 2);
+
+        await Page.WaitForFunctionAsync("() => window.left.includes('outer')");
+        await Page.GetByRole(AriaRole.Button, new() { Name = "outer bold" }).ClickAsync();
+        await Expect(outer.Locator("b, strong")).ToHaveCountAsync(0);
+
+        await SelectAsync(inner.Locator("p"), 0, 5);
+        await Page.GetByRole(AriaRole.Button, new() { Name = "inner bold" }).ClickAsync();
+        await Expect(inner.Locator("b, strong")).ToHaveTextAsync("inner");
+
+        await SelectAsync(outer.Locator("p"), 0, 5);
+        await Page.GetByRole(AriaRole.Button, new() { Name = "outer bold" }).ClickAsync();
+        await Expect(outer.Locator("b, strong")).ToHaveTextAsync("outer");
+    }
+
     // ---- Keyboard ----
 
     [Fact]
