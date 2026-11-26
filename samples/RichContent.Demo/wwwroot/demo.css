@@ -1,0 +1,64 @@
+body {
+    margin: 0;
+    font-family: system-ui, sans-serif;
+    line-height: 1.5;
+}
+
+/* The theme is on the root of the page. The editor takes its colours from it. */
+.demo {
+    box-sizing: border-box;
+    min-height: 100vh;
+    padding: 1rem 1.5rem;
+    color-scheme: light;
+    color: #1c2530;
+    background: #ffffff;
+    --rt-surface: #ffffff;
+}
+
+.demo.dark {
+    color-scheme: dark;
+    color: #e6eaf0;
+    background: #14181f;
+    --rt-surface: #14181f;
+}
+
+.settings {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem 1.25rem;
+    align-items: center;
+}
+
+.layout {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(32rem, 100%), 1fr));
+    gap: 2rem;
+    align-items: start;
+}
+
+.pane {
+    min-width: 0;
+}
+
+#demo-preview {
+    overflow-wrap: anywhere;
+}
+
+#demo-preview img {
+    max-width: 100%;
+    height: auto;
+}
+
+#demo-preview pre,
+#demo-saved {
+    overflow: auto;
+}
+
+#demo-saved {
+    min-height: 3rem;
+    max-height: 20rem;
+    padding: 0.5rem;
+    border: 1px solid color-mix(in srgb, currentColor 28%, transparent);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}

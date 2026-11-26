@@ -18,4 +18,5 @@
   <Project Path="tests/SyntaxCircus.Blazor.RichContent.Tests/SyntaxCircus.Blazor.RichContent.Tests.csproj" />
   <Project Path="tests/SyntaxCircus.RichContent.Tests/SyntaxCircus.RichContent.Tests.csproj" />
   <Project Path="samples/RichContent.Sample/RichContent.Sample.csproj" />
+  <Project Path="samples/RichContent.Demo/RichContent.Demo.csproj" />
 </Solution>

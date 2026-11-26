@@ -1,0 +1,12 @@
+@namespace RichContent.Demo
+@inherits SyntaxCircus.Blazor.RichContent.Editing.ExtensionBlockEditorBase
+@using System.Text.Json
+
+<label>Project name <input type="text" value="@Name" @oninput="NameChanged" disabled="@Disabled" /></label>
+
+@code {
+    private string Name => Data.ValueKind == JsonValueKind.Object && Data.TryGetProperty("name", out var name) ? name.GetString() ?? "" : "";
+
+    private Task NameChanged(ChangeEventArgs e) =>
+        DataChanged.InvokeAsync(JsonSerializer.SerializeToElement(new { name = e.Value?.ToString() ?? "" }));
+}

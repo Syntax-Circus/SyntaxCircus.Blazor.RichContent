@@ -514,10 +514,23 @@ parameter of the view and editor, or to `Validate`). The defaults are blog-sized
 var limits = RichContentLimits.Default with { Blocks = 50, TextBytes = 64 * 1024 };
 ```
 
-## Sample
+## Demo and sample
 
-`samples/RichContent.Sample` in the repository is a runnable Blazor Server app with an editor, a live preview, a media
-picker and a `project-card` extension block. It is not packed.
+Neither app is packed.
+
+**`samples/RichContent.Demo`** is for trying the editor by hand or through browser automation. From the repository
+root:
+
+```
+dotnet run --project samples/RichContent.Demo
+```
+
+Then open `http://localhost:5199`. One page has the editor, a live preview, the validation errors and the saved JSON.
+You can load several sample documents, disable the editor, lower the content limits and switch between a light and a
+dark theme. Nothing is stored: reloading the page starts again.
+
+**`samples/RichContent.Sample`** is the app the browser tests drive. It has an editor with a live preview, a media
+picker, a `project-card` extension block and the test pages.
 
 ## Maintaining
 

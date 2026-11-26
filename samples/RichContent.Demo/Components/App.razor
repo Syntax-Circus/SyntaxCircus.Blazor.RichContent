@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <base href="/" />
+    <title>Rich content demo</title>
+    @* An empty icon, so browsers do not request /favicon.ico and log its 404 as a console error. *@
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="@Assets["demo.css"]" />
+    @* This bundle also brings in the library's own component styles. *@
+    <link rel="stylesheet" href="@Assets["RichContent.Demo.styles.css"]" />
+    <HeadOutlet @rendermode="InteractiveServer" />
+</head>
+<body>
+    <Routes @rendermode="InteractiveServer" />
+    <script src="_framework/blazor.web.js"></script>
+</body>
+</html>
