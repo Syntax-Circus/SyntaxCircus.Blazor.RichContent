@@ -236,6 +236,36 @@ public class SurfaceDomTests(SampleHost host) : SurfaceTest(host)
     }
 
     [Fact]
+    public async Task ARedrawSentAgain_IsIgnored_AndSyncAnswersWithTheGenerationHeld()
+    {
+        await AttachAsync($$"""[{"kind":"paragraph","children":[{{Text("a")}}]}]""");
+
+        var held = await Page.EvaluateAsync<int?[]>("""
+            () => {
+                const { module, element } = window.lab;
+                const other = text => [{ key: 's9', node: { kind: 'paragraph', children: [{ kind: 'text', text }] } }];
+                element.firstChild.textContent = 'typed since';
+                // The same generation again: what has been typed since stays.
+                const again = module.sync(element, other('again'), false, true, 1);
+                const afterAgain = element.textContent;
+                // While composing, a newer one waits, and the answer says it has not been drawn.
+                element.dispatchEvent(new CompositionEvent('compositionstart'));
+                const waiting = module.sync(element, other('newer'), false, true, 2);
+                const whileWaiting = element.textContent;
+                element.dispatchEvent(new CompositionEvent('compositionend'));
+                const drawn = module.sync(element, null, true, false, 2);
+                window.shown = [afterAgain, whileWaiting, element.textContent, element.contentEditable];
+                element.remove();
+                const gone = module.sync(null, null, false, false, 2);
+                return [again, waiting, drawn, gone];
+            }
+            """);
+
+        held.ShouldBe([1, 1, 2, null]);
+        (await Page.EvaluateAsync<string[]>("() => window.shown")).ShouldBe(["typed since", "typed since", "newer", "false"]);
+    }
+
+    [Fact]
     public async Task ADisposedSurface_SendsNothingMore()
     {
         await AttachAsync($$"""[{"kind":"paragraph","children":[{{Text("a")}}]}]""");

@@ -1,5 +1,6 @@
 ﻿using System.Collections.Immutable;
 using System.Text;
+using System.Text.Json;
 using Microsoft.AspNetCore.Components;
 using SyntaxCircus.Blazor.RichContent.Editing.Surfaces;
 using SyntaxCircus.RichContent;
@@ -45,43 +46,72 @@ public partial class WritingBlock
         }
 
         _parameter = incoming;
-        var replaced = _parts.Count == 0
-            || !incoming.AsSpan().SequenceEqual(_nodes.AsSpan(), ReferenceEqualityComparer.Instance);
+        var before = _nodes;
         _nodes = incoming;
-        if (replaced)
+        if (_parts.Count == 0 || !SameObjects(incoming.AsSpan(), before.AsSpan()))
         {
-            Plan();
+            Plan(before);
         }
     }
 
-    // Parts keep their components where the new plan has a part of the same kind in the same turn, so that a surface
-    // can compare its new nodes with what it holds.
-    private void Plan()
+    // A part, and so its component, goes to the new segment that holds the same nodes, wherever that now is: the
+    // surface then keeps its text, caret, undo history and anything not yet delivered. The segments left over take
+    // the remaining parts of their kind in order, and their surfaces compare the new nodes with what they hold.
+    private void Plan(ImmutableArray<RichTextNode> before)
     {
-        var previous = _parts.GroupBy(part => part.Kind).ToDictionary(group => group.Key, group => new Queue<Part>(group));
-        _parts = [];
-        foreach (var segment in SurfacePlanner.Plan(_nodes))
+        var unused = new List<(Part Part, ImmutableArray<RichTextNode> Nodes)>(_parts.Count);
+        var start = 0;
+        foreach (var part in _parts)
         {
-            _parts.Add(Reuse(segment.Kind, segment.Count));
+            unused.Add((part, before.Slice(start, part.Count)));
+            start += part.Count;
         }
 
+        var segments = SurfacePlanner.Plan(_nodes).ToList();
         // Somewhere to type, which stores nothing until something is typed.
-        if (_parts.Count == 0)
+        if (segments.Count == 0)
         {
-            _parts.Add(Reuse(SegmentKind.Surface, 0));
+            segments.Add(new(SegmentKind.Surface, 0, 0));
         }
 
-        Part Reuse(SegmentKind kind, int count)
-        {
-            if (!previous.TryGetValue(kind, out var same) || !same.TryDequeue(out var part))
-            {
-                return new(kind, count);
-            }
+        var parts = new Part?[segments.Count];
+        // The same objects first, so that of two equal stretches each keeps its own.
+        Match((held, now, _) => SameObjects(held.AsSpan(), now.AsSpan()));
+        // Then the same values in new objects, as after a reload. Only a surface's nodes are known to be shallow
+        // enough to serialize, and only a surface has anything to lose.
+        Match((held, now, kind) => kind == SegmentKind.Surface && string.Equals(Json(held), Json(now), StringComparison.Ordinal));
+        Match((_, _, _) => true);
 
-            part.Count = count;
-            return part;
+        _parts = [.. segments.Select((segment, index) => parts[index] ?? new Part(segment.Kind, segment.Count))];
+
+        void Match(Func<ImmutableArray<RichTextNode>, ImmutableArray<RichTextNode>, SegmentKind, bool> matches)
+        {
+            for (var index = 0; index < segments.Count; index++)
+            {
+                if (parts[index] is not null)
+                {
+                    continue;
+                }
+
+                var segment = segments[index];
+                var nodes = Slice(segment.Start, segment.Count);
+                var found = unused.FindIndex(
+                    old => old.Part.Kind == segment.Kind && matches(old.Nodes, nodes, segment.Kind));
+                if (found >= 0)
+                {
+                    parts[index] = unused[found].Part;
+                    parts[index]!.Count = segment.Count;
+                    unused.RemoveAt(found);
+                }
+            }
         }
     }
+
+    private static bool SameObjects(ReadOnlySpan<RichTextNode> left, ReadOnlySpan<RichTextNode> right) =>
+        left.Length == right.Length && left.SequenceEqual(right, ReferenceEqualityComparer.Instance);
+
+    private static string Json(ImmutableArray<RichTextNode> nodes) =>
+        JsonSerializer.Serialize(nodes, ContentDocumentSerializer.Options);
 
     private ImmutableArray<RichTextNode> Slice(int start, int count) => _nodes.Slice(start, count);
 

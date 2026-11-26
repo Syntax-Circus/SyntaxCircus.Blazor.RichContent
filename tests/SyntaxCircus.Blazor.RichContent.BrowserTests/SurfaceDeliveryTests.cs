@@ -1,5 +1,7 @@
 ﻿using System.Text.Json.Nodes;
+using RichContent.Sample;
 using SyntaxCircus.Blazor.RichContent.BrowserTests.Harness;
+using static Microsoft.Playwright.Assertions;
 using static SyntaxCircus.Blazor.RichContent.BrowserTests.Harness.FixturePage;
 
 namespace SyntaxCircus.Blazor.RichContent.BrowserTests;
@@ -254,6 +256,36 @@ public class SurfaceDeliveryTests(SampleHost host) : SurfaceTest(host)
         (await SaveAsync(Page)).ShouldBe(Original("everything"));
     }
 
+    [Fact]
+    public async Task ARedrawTheBrowserNeverApplied_IsSentAgain_WhenTheOldContentIsEdited()
+    {
+        await OpenFixtureAsync("everything", "write");
+        await TapAsync();
+        var surface = Surface("prose");
+        var first = surface.Locator(":scope > p").First;
+        // Loses the redraw: the script holds it back, as during composition, and it is then thrown away.
+        await surface.EvaluateAsync("element => { element.richContentSurface.composing = true; }");
+        await Page.Locator("#replace-other").ClickAsync();
+        await Page.WaitForFunctionAsync("() => !!document.querySelector('[data-rt-surface]').richContentSurface.pending");
+        await surface.EvaluateAsync(
+            "element => { element.richContentSurface.pending = null; element.richContentSurface.composing = false; }");
+        (await first.TextContentAsync())!.ShouldStartWith("A plain paragraph");
+
+        await PlaceCaretAsync(first);
+        await Page.Keyboard.TypeAsync("x");
+
+        // The replacement wins in the surface that differed, and it is drawn this time.
+        await Expect(first).ToHaveTextAsync(Fixtures.ReplacementText);
+        // The redraw is sent before the edit is answered, so the new text can show first.
+        await Page.WaitForFunctionAsync("() => window.answers.length > 0");
+        (await Page.EvaluateAsync<bool[]>("() => window.answers.map(a => a.answer)")).ShouldBe([false]);
+        (await SaveAsync(Page)).ShouldBe(Serialized(Fixtures.Replaced(Parse(Original("everything")))));
+        await PlaceCaretAsync(first);
+        await Page.Keyboard.TypeAsync(" Kept.");
+        await WaitUntilAcknowledgedAsync();
+        TextOf(Nodes(await SaveAsync(Page), "prose")[0]).ShouldBe(Fixtures.ReplacementText + " Kept.");
+    }
+
     // A reconnect element of the host's own, as the project templates add. Blazor only sets classes on it.
     private const string AddOwnReconnectElement = """
         () => {
@@ -295,6 +327,9 @@ public class SurfaceDeliveryTests(SampleHost host) : SurfaceTest(host)
 
         // The watch fails the test on any uncaught error or unhandled rejection, during the outage too.
         var outage = await Watch.DropConnectionAsync(Page);
+        // Without one of its own, the page gets Blazor's default element, which is known by its shadow root.
+        (await Page.EvaluateAsync<bool>("() => document.getElementById('components-reconnect-modal').shadowRoot !== null"))
+            .ShouldBe(!ownReconnectElement);
         await Paragraph.EvaluateAsync("""
             paragraph => {
                 for (const character of ' offline') {

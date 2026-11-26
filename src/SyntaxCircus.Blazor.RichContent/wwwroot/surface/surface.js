@@ -29,6 +29,7 @@ function flush(surface) {
 }
 
 function render(surface, keyedNodes, generation) {
+    surface.generation = generation;
     buildSurface(surface.element, keyedNodes, surface.inline);
     surface.reader.adopt();
     // The baseline is the DOM as read back, not the stored nodes, so what the reader normalises is not a change.
@@ -98,6 +99,8 @@ export function attach(element, dotNetRef, options) {
         inline,
         composing: false,
         pending: null,
+        // Of the content shown. Null until the first redraw.
+        generation: null,
         listeners: new AbortController(),
         reader: createReader(element, inline),
     };
@@ -163,18 +166,20 @@ export function attach(element, dotNetRef, options) {
     element.richContentSurface = surface;
 }
 
-// With force, redraws the surface from keyedNodes ([{ key, node }]) of the given generation. Without it, the
-// content is left alone and only disabled is applied.
+// With force, redraws the surface from keyedNodes ([{ key, node }]) of the given generation, unless it already
+// has that generation: .NET sends a redraw again when it cannot tell that it arrived, and by then the author may
+// have typed. Without force, the content is left alone and only disabled is applied. Returns the generation the
+// surface then has, or null if there is no surface.
 export function sync(element, keyedNodes, disabled, force, generation) {
     const surface = element && surfaces.get(element);
     if (!surface) {
-        return;
+        return null;
     }
 
     element.contentEditable = disabled ? 'false' : 'true';
     element.setAttribute('aria-disabled', disabled ? 'true' : 'false');
 
-    if (force) {
+    if (force && generation !== surface.generation) {
         if (surface.composing) {
             // Rewriting the element now would break the composition.
             surface.pending = { keyedNodes, generation };
@@ -184,6 +189,7 @@ export function sync(element, keyedNodes, disabled, force, generation) {
     }
 
     element.setAttribute('data-rt-ready', 'true');
+    return surface.generation;
 }
 
 // Toolbar commands are not available yet. Returns whether the command ran.

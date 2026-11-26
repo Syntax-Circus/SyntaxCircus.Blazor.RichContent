@@ -1,6 +1,7 @@
 ﻿using System.Collections.Immutable;
 using System.Text.Json;
 using Microsoft.AspNetCore.Components;
+using Microsoft.Extensions.Logging;
 using Microsoft.JSInterop;
 using SyntaxCircus.RichContent;
 
@@ -22,14 +23,20 @@ public partial class RichTextSurface
     private IJSObjectReference? _module;
     private DotNetObjectReference<RichTextSurface>? _self;
 
-    // What the buffer, and so the browser, currently holds.
+    // What the buffer holds, and the browser too once the latest redraw has reached it.
     private ImmutableArray<RichTextNode> _current = [];
-    private bool _syncedDisabled;
+
+    // The latest redraw, kept to be sent again until the browser is known to have it.
+    private IReadOnlyList<KeyedNode> _redraw = [];
+    private int _confirmedGeneration;
+    private bool? _syncedDisabled;
     private bool _ready;
     private bool _loadFailed;
     private bool _disposed;
 
     [Inject] private IJSRuntime JS { get; set; } = default!;
+
+    [Inject] private ILogger<RichTextSurface> Logger { get; set; } = default!;
 
     [Parameter] public ImmutableArray<RichTextNode> Nodes { get; set; } = [];
 
@@ -50,6 +57,10 @@ public partial class RichTextSurface
     internal bool IsComposing { get; private set; }
 
     private ImmutableArray<RichTextNode> Items => Nodes.IsDefault ? [] : Nodes;
+
+    // True from a redraw until the browser shows that it has it. The call that carries it can fail, be cancelled,
+    // never answer or have no effect, and until then the browser may still show, and edit, the old content.
+    private bool RedrawIsUnconfirmed => _confirmedGeneration < _buffer.Generation;
 
     protected override void OnInitialized() => _buffer = new SurfaceBuffer(Profile == RichTextSurfaceProfile.Inline);
 
@@ -76,9 +87,9 @@ public partial class RichTextSurface
             }
         }
 
-        if (redraw || Disabled != _syncedDisabled)
+        if (redraw || RedrawIsUnconfirmed || Disabled != _syncedDisabled)
         {
-            await Interop(() => SyncAsync(redraw));
+            await SynchronizeAsync(redraw);
         }
     }
 
@@ -93,8 +104,9 @@ public partial class RichTextSurface
         {
             await Interop(AttachAsync);
         }
-        catch (JSException)
+        catch (JSException exception)
         {
+            Logger.LogError(exception, "The writing surface's script could not be loaded or run.");
             // A seam for falling back to the block editor when the script cannot be loaded or run.
             _loadFailed = true;
             StateHasChanged();
@@ -123,25 +135,58 @@ public partial class RichTextSurface
         await SyncAsync(redraw: true);
     }
 
+    // Sends Disabled and, with a new redraw or while the last one is unconfirmed, the content. The script ignores
+    // a redraw it already has, so sending one again cannot overwrite what has been typed since.
     private async ValueTask SyncAsync(bool redraw)
     {
-        var disabled = Disabled;
-        _syncedDisabled = disabled;
-        IReadOnlyList<KeyedNode>? keyed = null;
         if (redraw)
         {
-            // From here on, patches made against the old content are dropped.
+            // From here on, patches made against the old content are not applied.
             _current = Items;
-            keyed = _buffer.Reset(_current);
+            _redraw = _buffer.Reset(_current);
         }
 
-        if (_module is { } module)
+        if (_module is not { } module)
         {
-            await module.InvokeVoidAsync("sync", _element, keyed, disabled, redraw, _buffer.Generation);
+            return;
+        }
+
+        var disabled = Disabled;
+        var generation = _buffer.Generation;
+        var withContent = RedrawIsUnconfirmed;
+        // The answer is the generation the browser then has. It is not this one if the redraw had to wait.
+        var held = await module.InvokeAsync<int?>(
+            "sync", _element, withContent ? _redraw : null, disabled, withContent, generation);
+        if (held is not null)
+        {
+            _syncedDisabled = disabled;
+        }
+
+        if (held == generation)
+        {
+            Confirm(generation);
         }
     }
 
-    // A lost connection or a component on its way out is not an error here.
+    private void Confirm(int generation) => _confirmedGeneration = Math.Max(_confirmedGeneration, generation);
+
+    private ValueTask SynchronizeAsync(bool redraw) => Interop(() => SyncAsync(redraw));
+
+    private async Task SendRedrawAgainAsync()
+    {
+        try
+        {
+            await SynchronizeAsync(redraw: false);
+        }
+        catch (Exception exception)
+        {
+            // Nothing awaits this, so an unexpected failure has to be handed over to be seen.
+            await DispatchExceptionAsync(exception);
+        }
+    }
+
+    // A lost connection, a call given up on or a component on its way out must not end the circuit. A script that
+    // threw is a defect: it is logged as an error, but the author's other work is worth more than the circuit.
     private async ValueTask Interop(Func<ValueTask> call)
     {
         try
@@ -151,13 +196,21 @@ public partial class RichTextSurface
         catch (JSDisconnectedException)
         {
         }
+        catch (OperationCanceledException exception)
+        {
+            Logger.LogDebug(exception, "A call to the writing surface's script was cancelled.");
+        }
         catch (ObjectDisposedException) when (_disposed)
         {
+        }
+        catch (JSException exception) when (_ready)
+        {
+            Logger.LogError(exception, "A call to the writing surface's script failed.");
         }
     }
 
     /// <summary>
-    /// One chunk of a patch from the browser. False means the patch was rejected, so the browser keeps it as
+    /// One chunk of a patch from the browser. False means the patch was not applied, so the browser keeps it as
     /// unacknowledged and sends it again with the author's next change. For the script only.
     /// </summary>
     /// <remarks>
@@ -173,6 +226,7 @@ public partial class RichTextSurface
         }
 
         ImmutableArray<RichTextNode> nodes;
+        var behind = false;
         try
         {
             if (_assembler.Add(sequence, index, count, chunk) is not { } payload)
@@ -183,19 +237,41 @@ public partial class RichTextSurface
             var patch = JsonSerializer.Deserialize<SurfacePatch>(payload, JsonSerializerOptions.Web)
                 ?? throw new FormatException("There is no patch.");
 
-            // Sent before the browser learned that the content had been replaced. Generations start at 1, so a
-            // payload without one is not old but wrong.
-            if (patch.Generation > 0 && patch.Generation < _buffer.Generation)
+            // Made against content that has since been replaced. Generations start at 1, so a payload without one
+            // is not old but wrong.
+            behind = patch.Generation > 0 && patch.Generation < _buffer.Generation;
+            if (!behind)
             {
-                return Task.FromResult(true);
-            }
+                if (patch.Generation == _buffer.Generation)
+                {
+                    Confirm(patch.Generation);
+                }
 
-            nodes = _buffer.Apply(patch);
+                nodes = _buffer.Apply(patch);
+            }
+            else
+            {
+                nodes = default;
+            }
         }
         catch (Exception exception) when (exception is FormatException or JsonException or ArgumentException
             or InvalidOperationException or NotSupportedException)
         {
             OnEditRejected();
+            return Task.FromResult(false);
+        }
+
+        if (behind)
+        {
+            // With the replacement confirmed, this was in flight when it happened and is dropped.
+            if (!RedrawIsUnconfirmed)
+            {
+                return Task.FromResult(true);
+            }
+
+            // Otherwise the browser may never have had it. Answering true would let the browser forget an edit that
+            // went nowhere, along with every one after it. Send the replacement again, and have the edit kept.
+            _ = SendRedrawAgainAsync();
             return Task.FromResult(false);
         }
 
@@ -256,13 +332,10 @@ public partial class RichTextSurface
         {
             if (_module is { } module)
             {
-                await module.InvokeVoidAsync("dispose", _element);
-                await module.DisposeAsync();
+                // Separately, so that one failing does not leave the other undone.
+                await Interop(() => module.InvokeVoidAsync("dispose", _element));
+                await Interop(module.DisposeAsync);
             }
-        }
-        catch (JSDisconnectedException)
-        {
-            // The page is gone, and the script with it.
         }
         finally
         {
