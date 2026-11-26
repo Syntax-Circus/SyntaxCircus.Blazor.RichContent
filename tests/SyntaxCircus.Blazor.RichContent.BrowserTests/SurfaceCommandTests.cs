@@ -541,6 +541,208 @@ public class SurfaceCommandTests(SampleHost host) : SurfaceTest(host)
         (await Page.EvaluateAsync<string>("() => getSelection().toString()")).ShouldBe("text");
     }
 
+    // ---- A link too long for the box ----
+
+    // A host with a raised limit, and "text" linked to an address of this length.
+    private async Task<string> OpenWithLinkOfLengthAsync(int length)
+    {
+        await OpenFixtureAsync("empty", "write&urlLimit=8000");
+        await WaitForSurfacesAsync(Page);
+        await Start.ClickAsync();
+        await Page.Keyboard.TypeAsync("text");
+        var address = "https://example.com/" + new string('a', length - 21) + "z";
+        address.Length.ShouldBe(length);
+        await SelectAsync(FirstBlock, 0, 4);
+        // The script's own command: the box cannot take an address this long.
+        await Start.EvaluateAsync(
+            "async (surface, address) => (await import('/_content/SyntaxCircus.Blazor.RichContent/surface/surface.js')).command(surface, 'link', address)",
+            address);
+        await ShouldHaveNodesAsync(P(Link(address, T("text"))));
+        await PlaceCaretAsync(Start.Locator("a"), 2);
+        await Expect(Tool("Link")).ToHaveAttributeAsync("aria-pressed", "true");
+        return address;
+    }
+
+    [Theory]
+    [InlineData(4001)]
+    [InlineData(5000)]
+    public async Task LinkBox_OnALinkTooLongForIt_AppliesNothing_ButCanRemoveIt(int length)
+    {
+        var address = await OpenWithLinkOfLengthAsync(length);
+        var box = Page.GetByRole(AriaRole.Group, new() { Name = "Link", Exact = true });
+
+        // Opening the box and pressing Enter, as one looking at a link might.
+        await Page.Keyboard.PressAsync("ControlOrMeta+k");
+        await Expect(box.GetByRole(AriaRole.Alert)).ToContainTextAsync("Blocks mode");
+        await LinkAddress.PressAsync("Enter");
+        await Expect(LinkAddress).ToBeVisibleAsync();
+        await ShouldHaveNodesAsync(P(Link(address, T("text"))));
+
+        await box.GetByRole(AriaRole.Button, new() { Name = "Apply link" }).ClickAsync();
+        await Expect(LinkAddress).ToBeVisibleAsync();
+        await ShouldHaveNodesAsync(P(Link(address, T("text"))));
+
+        await LinkAddress.FillAsync("https://example.com/typed-afresh");
+        await LinkAddress.PressAsync("Enter");
+        await ShouldHaveNodesAsync(P(Link(address, T("text"))));
+
+        await box.GetByRole(AriaRole.Button, new() { Name = "Remove link" }).ClickAsync();
+        await ShouldHaveNodesAsync(P(T("text")));
+    }
+
+    [Fact]
+    public async Task LinkBox_OnALinkOfExactlyTheMostItHolds_WorksAsEver()
+    {
+        var address = await OpenWithLinkOfLengthAsync(4000);
+
+        await Page.Keyboard.PressAsync("ControlOrMeta+k");
+        await Expect(LinkAddress).ToHaveValueAsync(address);
+        await Expect(Page.GetByRole(AriaRole.Group, new() { Name = "Link", Exact = true }).GetByRole(AriaRole.Alert)).ToHaveCountAsync(0);
+        await LinkAddress.PressAsync("Enter");
+
+        await Expect(LinkAddress).ToHaveCountAsync(0);
+        await ShouldHaveNodesAsync(P(Link(address, T("text"))));
+    }
+
+    // ---- Code in the shapes a browser's editing leaves ----
+
+    // Every character of the surface, and of what is stored, with those that are code between « and ».
+    private const string ShownCodeScript = """
+        surface => {
+            const walker = document.createTreeWalker(surface, NodeFilter.SHOW_TEXT);
+            let shown = '';
+            for (let text = walker.nextNode(); text; text = walker.nextNode()) {
+                const code = getComputedStyle(text.parentElement).fontFamily.split(',')[0].replace(/["']/g, '').trim() === 'rt-code';
+                shown += code ? '«' + text.data + '»' : text.data;
+            }
+
+            return shown.replaceAll('»«', '');
+        }
+        """;
+
+    private static string Marked(JsonNode? node) =>
+        (string?)node!["kind"] == "inlineCode" ? "«" + (string)node["text"]! + "»"
+        : (string?)node["text"] ?? string.Concat(node["children"]?.AsArray().Select(Marked) ?? []);
+
+    private async Task ShouldBeStoredAsShownAsync()
+    {
+        var shown = await Start.EvaluateAsync<string>(ShownCodeScript);
+        var saved = Nodes(await SaveAsync(Page), "start");
+        var stored = string.Concat(saved.Select(Marked)).Replace("»«", "", StringComparison.Ordinal);
+        stored.ShouldBe(shown, await Start.InnerHTMLAsync() + Environment.NewLine + saved.ToJsonString());
+    }
+
+    // WebKit ends this with code in a <span> with a style, and in a <font> naming two families.
+    [Fact]
+    public async Task InlineCode_ThroughLeavingAListAndQuoting_IsStoredAsShown()
+    {
+        await OpenEmptyAsync();
+        var keys = Page.Keyboard;
+        await keys.TypeAsync("alpha");
+        await keys.PressAsync("Enter");
+        await keys.TypeAsync("beta");
+        await keys.PressAsync("ControlOrMeta+b");
+        await keys.TypeAsync("b");
+        await keys.PressAsync("ControlOrMeta+b");
+        await keys.PressAsync("ControlOrMeta+e");
+        await keys.TypeAsync("c");
+        await keys.PressAsync("ControlOrMeta+e");
+        await Expect(Tool("Bulleted list")).ToBeEnabledAsync();
+        await Tool("Bulleted list").ClickAsync();
+        await Expect(Start.Locator("li")).ToHaveCountAsync(1);
+        await keys.PressAsync("End");
+        await keys.PressAsync("Enter");
+        await keys.PressAsync("Enter");
+        await keys.TypeAsync("after");
+        await ShouldBeStoredAsShownAsync();
+
+        // Saving took the focus. Back in the text, the line is joined to what is above, then a new one is quoted.
+        await Start.FocusAsync();
+        await keys.PressAsync("Home");
+        await keys.PressAsync("Backspace");
+        await ShouldBeStoredAsShownAsync();
+
+        await Start.FocusAsync();
+        await keys.PressAsync("End");
+        await keys.PressAsync("Enter");
+        await keys.PressAsync("Enter");
+        await keys.TypeAsync("q");
+        await Expect(Tool("Quote")).ToBeEnabledAsync();
+        await Tool("Quote").ClickAsync();
+        await Expect(Start.Locator("blockquote")).ToHaveCountAsync(1);
+
+        await ShouldBeStoredAsShownAsync();
+        (await Start.EvaluateAsync<string>(ShownCodeScript)).ShouldContain("«");
+        (await ErrorCodesAsync(Page)).ShouldBeEmpty();
+    }
+
+    // Puts markup in the live surface, as the browser's editing might leave it, and has it sent.
+    private async Task LeaveMarkupAsync(string markup)
+    {
+        await OpenEmptyAsync();
+        await Start.EvaluateAsync(
+            "(surface, markup) => { surface.innerHTML = markup; surface.dispatchEvent(new InputEvent('input', { bubbles: true })); }",
+            markup);
+    }
+
+    [Theory]
+    [InlineData("<font face=\"rt-code, monospace\">two</font>")]
+    [InlineData("<span style=\"font-family: rt-code, monospace;\">two</span>")]
+    [InlineData("<font face=\"rt-code\">t<font face=\"rt-code, monospace\">w</font>o</font>")]
+    [InlineData("<font face=\"rt-code\"><span style=\"font-family: rt-code, monospace;\">two</span></font>")]
+    public async Task TheCodeButton_ShowsAndRemovesCode_InEveryShape(string code)
+    {
+        await LeaveMarkupAsync($"<p>one {code} three</p>");
+        await ShouldBeStoredAsShownAsync();
+        await SelectAsync(FirstBlock, 4, 7);
+        await Expect(Tool("Inline code")).ToHaveAttributeAsync("aria-pressed", "true");
+
+        await Tool("Inline code").ClickAsync();
+
+        await ShouldHaveNodesAsync(P(T("one two three")));
+        await ShouldBeStoredAsShownAsync();
+        await Expect(Tool("Inline code")).ToHaveAttributeAsync("aria-pressed", "false");
+    }
+
+    // Part of a run, where a browser may split the element or put another inside it.
+    [Theory]
+    [InlineData("<font face=\"rt-code\">two</font>")]
+    [InlineData("<font face=\"rt-code, monospace\">two</font>")]
+    [InlineData("<span style=\"font-family: rt-code, monospace;\">two</span>")]
+    public async Task RemovingCode_FromPartOfARun_IsStoredAsShown(string code)
+    {
+        await LeaveMarkupAsync($"<p>one {code} three</p>");
+        await SelectAsync(FirstBlock, 5, 6);
+        await Expect(Tool("Inline code")).ToHaveAttributeAsync("aria-pressed", "true");
+
+        await Tool("Inline code").ClickAsync();
+
+        await ShouldHaveNodesAsync(P(T("one "), Code("t"), T("w"), Code("o"), T(" three")));
+        await ShouldBeStoredAsShownAsync();
+    }
+
+    [Theory]
+    [InlineData("<b><i><font face=\"rt-code, monospace\">two</font></i></b>")]
+    [InlineData("<b><i><span style=\"font-family: rt-code, monospace;\">two</span></i></b>")]
+    [InlineData("<span style=\"font-family: rt-code, monospace;\"><b><i>two</i></b></span>")]
+    [InlineData("<font face=\"rt-code, monospace\"><b><i>two</i></b></font>")]
+    public async Task RemovingCode_InEveryShape_KeepsBoldAndItalic(string code)
+    {
+        await LeaveMarkupAsync($"<p>one {code} three</p>");
+        await SelectAsync(FirstBlock, 4, 7);
+        await Expect(Tool("Inline code")).ToHaveAttributeAsync("aria-pressed", "true");
+
+        await Tool("Inline code").ClickAsync();
+
+        await ShouldBeStoredAsShownAsync();
+        var paragraph = (await SavedAsync()).ShouldHaveSingleItem();
+        paragraph.ShouldNotContain("inlineCode");
+        // Either may be around the other.
+        Canonical(paragraph).ShouldBeOneOf(
+            Canonical(P(T("one "), Strong(Em(T("two"))), T(" three"))),
+            Canonical(P(T("one "), Em(Strong(T("two"))), T(" three"))));
+    }
+
     // A list that is closed takes the arrows as a new choice. In the toolbar that would restyle the paragraph and send
     // the author back to the text, with the buttons after the list never reached.
     [Fact]

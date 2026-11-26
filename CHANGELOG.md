@@ -47,7 +47,8 @@ See the README's "Write mode" section before turning it on. In short:
 - Do not override fonts inside `[data-rt-surface]` with `!important`; keep `"rt-code"` first in a code font you set
   there.
 - The editor sets `defaultParagraphSeparator`, which applies to the whole document.
-- If you raise `UrlCharacters` above 4000, the Write mode link box shortens longer stored links when applied.
+- If you raise `UrlCharacters` above 4000: on a stored link longer than 4000 characters, the Write mode link box
+  applies no address, and can only remove the link. Edit such a link in Blocks mode.
 - Blocks mode is unchanged apart from styling: with large fields it still needs a higher
   `HubOptions.MaximumReceiveMessageSize`. Write mode does not.
 

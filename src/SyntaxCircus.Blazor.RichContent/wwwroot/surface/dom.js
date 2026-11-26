@@ -20,7 +20,51 @@ const PARAGRAPH = 'data-rt-paragraph';
 // Inline code is the browser's font command with this face, since no command makes <code>, and a <code> inserted as
 // markup is dropped in places, or cannot be taken away again.
 export const CODE_FACE = 'rt-code';
-export const CODE_SELECTOR = `code, font[face="${CODE_FACE}"]`;
+// What a code command's caret is given to type outside code again.
+export const PLAIN_FACE = 'rt-plain';
+
+export const firstFamily = families => String(families).split(',')[0].replace(/["']/g, '').trim();
+
+// The first font family an element names itself, or null if it names none. Only its own face and style are read, never
+// what the page's styles make of it. A style outranks a face, except on the two faces that the surface's styles pin.
+// Browsers write both ways when they restyle code, with other families after ours.
+function ownFamily(element) {
+    const face = tagOf(element) === 'FONT' ? element.getAttribute('face') : null;
+    if (face === CODE_FACE || face === PLAIN_FACE) {
+        return face;
+    }
+
+    const styled = firstFamily(element.style?.fontFamily ?? '');
+    if (!['', 'inherit', 'unset'].includes(styled)) {
+        return styled;
+    }
+
+    return firstFamily(face ?? '') || null;
+}
+
+// True if the element makes what is in it code, false if it makes it something else, null if it leaves that as it is.
+function declaresCode(element) {
+    if (tagOf(element) === 'CODE') {
+        return true;
+    }
+
+    const family = ownFamily(element);
+    return family === null ? null : family === CODE_FACE;
+}
+
+// The element that makes the node code, if it is code: of those from the node up to the surface, the nearest one that
+// says either way decides. The reader and the commands both ask here, so that what is stored is what the toolbar says.
+export function codeElement(root, node) {
+    for (let element = node instanceof Element ? node : node.parentElement; element && element !== root;
+        element = element.parentElement) {
+        const says = declaresCode(element);
+        if (says !== null) {
+            return says ? element : null;
+        }
+    }
+
+    return null;
+}
 
 const NBSP = '\u00a0';
 const NBSP_CONTEXT = 8;
@@ -301,8 +345,32 @@ export function linkUrl(element) {
 
 function readInline(run, textOf) {
     const spaced = spacedBreaks(run);
+    const isInCode = node => node.parentElement !== null && codeElement(textOf.surface, node.parentElement) !== null;
 
+    // Where code begins or ends at an element, what is read from it is marked so. An element that only says again what
+    // is around it changes nothing.
     const convert = (node, withinLink, out) => {
+        const says = node.nodeType === Node.ELEMENT_NODE && !IGNORED.has(tagOf(node)) && tagOf(node) !== 'CODE'
+            ? declaresCode(node)
+            : null;
+        if (says === null || says === isInCode(node)) {
+            read(node, withinLink, out);
+            return;
+        }
+
+        const inner = [];
+        read(node, withinLink, inner);
+        const content = merged(inner);
+        if (says) {
+            // A command can leave formatting and links inside code, which the model only has around it. Each run of
+            // text is made code where it is.
+            out.push(...codeRuns(content));
+        } else if (content.length > 0) {
+            out.push({ kind: PLAIN, children: content });
+        }
+    };
+
+    const read = (node, withinLink, out) => {
         if (node.nodeType === Node.TEXT_NODE) {
             out.push({ kind: 'text', text: textOf(node) });
             return;
@@ -338,24 +406,6 @@ function readInline(run, textOf) {
             case 'EM':
                 wrap({ kind: 'emphasis' }, children());
                 return;
-            case 'FONT': {
-                const face = node.getAttribute('face');
-                if (face === CODE_FACE) {
-                    // A command can leave formatting and links inside code, which the model only has around it. Each
-                    // run of text is made code where it is.
-                    out.push(...codeRuns(children()));
-                    return;
-                }
-
-                // Taking code away from part of a stretch of it can leave another face inside it. The innermost face
-                // is the one that counts, so what is in this one is not code.
-                if (face !== null && isInCode(node)) {
-                    wrap({ kind: PLAIN }, children());
-                    return;
-                }
-
-                break;
-            }
             case 'CODE': {
                 const content = children();
                 // The model has no link inside code. A command can put code around one, which then has to hold the
@@ -385,8 +435,26 @@ function readInline(run, textOf) {
         node.childNodes.forEach(child => convert(child, withinLink, out));
     };
 
+    // What is around the run can make it code too, as a block with a style does. Whatever is not code inside code has
+    // been marked, and no mark leaves here.
     const result = [];
-    run.forEach(node => convert(node, false, result));
+    let group = [];
+    let inCode = false;
+    const flush = () => {
+        result.push(...(inCode ? codeRuns(merged(group)) : withoutPlain(group)));
+        group = [];
+    };
+    for (const node of run) {
+        const here = isInCode(node);
+        if (here !== inCode) {
+            flush();
+            inCode = here;
+        }
+
+        convert(node, false, group);
+    }
+
+    flush();
     return merged(result);
 }
 
@@ -394,8 +462,6 @@ const plainText = node => node.text ?? (node.children ?? []).map(plainText).join
 
 // While code is being read, what is inside it but not code. Never leaves the reader.
 const PLAIN = 'plain';
-
-const isInCode = element => element.parentElement?.closest('code, font[face]')?.matches(CODE_SELECTOR) === true;
 
 const withoutPlain = nodes => merged(nodes.flatMap(node => {
     if (node.kind === PLAIN) {
@@ -757,6 +823,8 @@ export function createReader(root, inline) {
 
         read() {
             const textOf = spaces.read();
+            // Where the reading of what is code stops: nothing outside the surface counts.
+            textOf.surface = root;
             // Inline content has no elements to carry keys, so a position is its key and every patch is complete.
             return inline
                 ? readInline([...root.childNodes], textOf).map((node, index) => entry(`i${index}`, node))

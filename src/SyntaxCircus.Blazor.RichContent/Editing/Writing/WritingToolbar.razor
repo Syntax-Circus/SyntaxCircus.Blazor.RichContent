@@ -52,7 +52,11 @@
       <button type="button" data-rt-link-apply data-rt-checked="@(CheckedAddress is null ? null : _address)" data-rt-address="@CheckedAddress" @onclick="ApplyLinkAsync">Apply link</button>
       <button type="button" data-rt-link-remove @onclick="() => CloseLinkAsync(string.Empty)">Remove link</button>
       <button type="button" @onclick="() => CloseLinkAsync(null)">Cancel</button>
-      @if (_refused)
+      @if (_truncated)
+      {
+        <p class="error" role="alert">@WriteModeMessages.LinkTooLong</p>
+      }
+      else if (_refused)
       {
         <p class="error" role="alert">This address cannot be linked. Use an https:, mailto: or tel: address, or a path on this site that starts with a single /. Spaces, quotes, backslashes and user names are not allowed.</p>
       }
@@ -68,6 +72,8 @@
   private RichTextSurface? _linkTarget;
   private string _address = "";
   private bool _refused;
+  // True when the box was opened on an address of which it holds only the start. Settled then, with what it holds.
+  private bool _truncated;
   private bool _focusLinkInput;
   private int _linkOpening;
   // The surface the Insert menu was opened for.
@@ -304,6 +310,7 @@
 
     _linkTarget = Session!.Surface;
     _address = Selection!.LinkUrl ?? "";
+    _truncated = Selection.LinkUrlTruncated;
     _refused = false;
     _focusLinkInput = true;
   }
@@ -321,7 +328,11 @@
     get
     {
       var address = _address.Trim();
-      return address.Length == 0 || RichContentUrl.IsSafe(address, Session!.Limits.UrlCharacters) ? address : null;
+      // Where the box began with only the start of an address, nothing in it can be told from that start, changed or
+      // not, so only removal is left.
+      return address.Length == 0 || (!_truncated && RichContentUrl.IsSafe(address, Session!.Limits.UrlCharacters))
+        ? address
+        : null;
     }
   }
 

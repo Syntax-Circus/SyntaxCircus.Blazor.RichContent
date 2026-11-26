@@ -25,7 +25,7 @@
             <button type="button" id="mode-blocks-later" @onclick="SwitchToBlocksLaterAsync">Switch to blocks shortly</button>
         </p>
         <ContentDocumentEditor Document="_document" DocumentChanged="OnDocumentChanged" ErrorsChanged="OnErrorsChanged"
-                               Mode="EditorMode" ModeChanged="chosen => _chosen = chosen" Disabled="_disabled ?? Disabled" />
+                               Mode="EditorMode" ModeChanged="chosen => _chosen = chosen" Disabled="_disabled ?? Disabled" Limits="Limits" />
         <p>Changes: <span id="changes">@_changes</span></p>
         <ul id="errors">
             @foreach (var error in _errors)
@@ -54,6 +54,11 @@
     [SupplyParameterFromQuery] public string? Mode { get; set; }
 
     [SupplyParameterFromQuery] public bool Disabled { get; set; }
+
+    /// <summary>A raised or lowered <see cref="RichContentLimits.UrlCharacters"/>, as a host may set.</summary>
+    [SupplyParameterFromQuery] public int? UrlLimit { get; set; }
+
+    private RichContentLimits? Limits => UrlLimit is { } characters ? RichContentLimits.Default with { UrlCharacters = characters } : null;
 
     private bool? _disabled;
 

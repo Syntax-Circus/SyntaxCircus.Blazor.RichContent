@@ -4,10 +4,9 @@
 // it. Where a command needs markup, it is the serialization of nodes made with DOM APIs, from nodes already in the
 // surface or with text set as text.
 
-import { CODE_SELECTOR, CODE_FACE, linkUrl, mayBeHref } from './dom.js';
+import { CODE_FACE, PLAIN_FACE, codeElement, firstFamily, linkUrl, mayBeHref } from './dom.js';
 
-// What a code command's caret is given to type outside code again.
-const PLAIN_FACE = 'rt-plain';
+// The most of a link's address that is reported, so that the message stays small. The link box holds no more.
 const MAX_REPORTED_URL = 4000;
 const GECKO = CSS.supports('-moz-appearance', 'none');
 
@@ -169,7 +168,7 @@ function closestWithin(root, node, selector) {
 // ---- State at the cursor ----
 
 // The first family of what the browser answers, which can be a computed list.
-const fontAtCaret = () => String(document.queryCommandValue('fontName')).split(',')[0].replace(/["']/g, '').trim();
+const fontAtCaret = () => firstFamily(document.queryCommandValue('fontName'));
 
 // The text nodes the range selects at least one character of.
 function selectedTexts(root, range) {
@@ -186,16 +185,10 @@ function selectedTexts(root, range) {
     return found;
 }
 
-// The element that makes the node code, if it is: the innermost <code> or face around it decides.
-function codeAround(root, node) {
-    const element = closestWithin(root, node, 'code, font[face]');
-    return element?.matches(CODE_SELECTOR) ? element : null;
-}
-
 function isCode(root, range) {
     if (!range.collapsed) {
         const texts = selectedTexts(root, range);
-        return texts.length > 0 && texts.every(text => codeAround(root, text) !== null);
+        return texts.length > 0 && texts.every(text => codeElement(root, text) !== null);
     }
 
     // The browser knows what it will format the next character as, which a click on a button may just have changed.
@@ -204,7 +197,7 @@ function isCode(root, range) {
         return true;
     }
 
-    return font !== PLAIN_FACE && codeAround(root, range.startContainer) !== null;
+    return font !== PLAIN_FACE && codeElement(root, range.startContainer) !== null;
 }
 
 function linksIn(root, range) {
@@ -225,12 +218,15 @@ export function selectionState(root) {
     const first = range.collapsed ? range.startContainer : selectedTexts(root, range)[0] ?? range.startContainer;
     const within = selector => closestWithin(root, first, selector);
     const link = linksIn(root, range)[0];
+    const address = link ? linkUrl(link) ?? '' : null;
     const list = within('ul,ol');
     return {
         bold: document.queryCommandState('bold'),
         italic: document.queryCommandState('italic'),
         code: isCode(root, range),
-        linkUrl: link ? (linkUrl(link) ?? '').slice(0, MAX_REPORTED_URL) : null,
+        linkUrl: address?.slice(0, MAX_REPORTED_URL) ?? null,
+        // Said, and not left to be guessed: the start of an address must never be taken for the whole of it.
+        linkUrlTruncated: address !== null && address.length > MAX_REPORTED_URL,
         style: within('h2,h3,h4')?.tagName.toLowerCase() ?? 'p',
         list: list ? (list.tagName === 'OL' ? 'numbers' : 'bullets') : 'none',
         quote: within('blockquote') !== null,
@@ -950,9 +946,10 @@ function leaveCodeAtLineEnd(root) {
         return false;
     }
 
-    const code = codeAround(root, range.startContainer);
+    const code = codeElement(root, range.startContainer);
     const block = code && textBlockOf(root, code);
-    if (!block || fontAtCaret() === PLAIN_FACE
+    // A style can make a whole block code, and then there is nothing inside the block to step out of.
+    if (!block || block === code || fontAtCaret() === PLAIN_FACE
         || rangeBetween([range.startContainer, range.startOffset], ownEnd(block)).toString() !== '') {
         return false;
     }

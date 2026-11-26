@@ -124,6 +124,71 @@ public class SurfaceDomTests(SampleHost host) : SurfaceTest(host)
         (await ReadMarkupAsync(markup)).ShouldBe(Canonical(expected));
     }
 
+    private static string InlineCode(string text) => $$"""{"kind":"inlineCode","text":"{{text}}"}""";
+
+    private static string Paragraph(params string[] children) => $$"""[{"kind":"paragraph","children":[{{string.Join(',', children)}}]}]""";
+
+    // Code is what shows in the code font: the first family an element itself names, in its face or its style.
+    public static TheoryData<string, string> CodeShapes => new()
+    {
+        { "<p>a <font face=\"rt-code, monospace\">b</font> c</p>", Paragraph(Text("a "), InlineCode("b"), Text(" c")) },
+        { "<p>a <span style=\"font-family: rt-code, monospace;\">b</span></p>", Paragraph(Text("a "), InlineCode("b")) },
+        { "<p><span style='font-family: \"rt-code\", monospace'>b</span></p>", Paragraph(InlineCode("b")) },
+        // Code named again inside code changes nothing.
+        { "<p><font face=\"rt-code\">a<font face=\"rt-code, monospace\">b</font>c</font></p>", Paragraph(InlineCode("abc")) },
+        { "<p><font face=\"rt-code\">a<span style=\"font-family: rt-code, monospace\">b</span>c</font></p>", Paragraph(InlineCode("abc")) },
+        { "<p><span style=\"font-family: rt-code\">a<font face=\"rt-code\">b</font></span></p>", Paragraph(InlineCode("ab")) },
+        // Two elements side by side stay two runs, as two stored ones do.
+        { "<p><font face=\"rt-code\">a</font><font face=\"rt-code, monospace\">b</font></p>", Paragraph(InlineCode("a"), InlineCode("b")) },
+        // Another family inside code is not code, whichever way it is named.
+        { "<p><font face=\"rt-code, monospace\">a<font face=\"rt-plain\">b</font></font></p>", Paragraph(InlineCode("a"), Text("b")) },
+        { "<p><font face=\"rt-code\">a<font face=\"rt-plain, serif\">b</font></font></p>", Paragraph(InlineCode("a"), Text("b")) },
+        { "<p><font face=\"rt-code\">a<span style=\"font-family: rt-plain\">b</span></font></p>", Paragraph(InlineCode("a"), Text("b")) },
+        { "<p><span style=\"font-family: rt-code\">a<span style=\"font-family: serif\">b</span></span></p>", Paragraph(InlineCode("a"), Text("b")) },
+        { "<p><span style=\"font-family: rt-code\">a<span style=\"font-family: inherit\">b</span></span></p>", Paragraph(InlineCode("ab")) },
+        // A style outranks a face, except on the two faces the surface's own styles pin.
+        { "<p><font face=\"rt-code, monospace\" style=\"font-family: serif\">a</font></p>", Paragraph(Text("a")) },
+        { "<p><font face=\"serif\" style=\"font-family: rt-code\">a</font></p>", Paragraph(InlineCode("a")) },
+        { "<p><font face=\"rt-code\" style=\"font-family: serif\">a</font></p>", Paragraph(InlineCode("a")) },
+        // Any element can name it: formatting, a link, a block.
+        { "<p><b style=\"font-family: rt-code\">a</b></p>", Paragraph($$"""{"kind":"strong","children":[{{InlineCode("a")}}]}""") },
+        { "<p><a href=\"https://example.com/\" style=\"font-family: rt-code\">a</a></p>", Paragraph($$"""{"kind":"link","url":"https://example.com/","children":[{{InlineCode("a")}}]}""") },
+        { "<p style=\"font-family: rt-code, monospace\">a<b>b</b></p>", Paragraph(InlineCode("a"), $$"""{"kind":"strong","children":[{{InlineCode("b")}}]}""") },
+        // Only the first family counts, and only the attribute is the element's own.
+        { "<p><span style=\"font-family: monospace, rt-code\">a</span><font face=\"monospace, rt-code\">b</font><span face=\"rt-code\">c</span></p>", Paragraph(Text("abc")) },
+    };
+
+    [Theory]
+    [MemberData(nameof(CodeShapes))]
+    public async Task Code_IsReadFromTheFamilyAnElementItselfNames(string markup, string expected)
+    {
+        await AttachAsync("[]");
+
+        (await ReadMarkupAsync(markup)).ShouldBe(Canonical(expected));
+    }
+
+    // Neither a page's styles nor anything around the surface can make text code.
+    [Fact]
+    public async Task AFontFromOutsideTheElementsOfTheSurface_MakesNothingCode()
+    {
+        await AttachAsync(Paragraph(Text("plain")));
+        await Page.EvaluateAsync("""
+            () => {
+                const sheet = new CSSStyleSheet();
+                sheet.replaceSync('#lab, #lab p, .coded { font-family: rt-code, monospace; }');
+                document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
+                window.lab.element.firstElementChild.classList.add('coded');
+                window.lab.element.style.fontFamily = 'rt-code';
+                const around = document.createElement('code');
+                around.style.fontFamily = 'rt-code';
+                window.lab.element.replaceWith(around);
+                around.append(window.lab.element);
+            }
+            """);
+
+        (await ReadAsync()).ShouldBe(Canonical(Paragraph(Text("plain"))));
+    }
+
     [Fact]
     public async Task AParagraphHoldingAList_IsReadAsTwoNodes()
     {

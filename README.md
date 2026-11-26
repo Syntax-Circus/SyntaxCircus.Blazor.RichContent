@@ -174,9 +174,16 @@ miss that link. The link box stays open until the server has handled the click, 
 
 In Write mode the editor builds each edit on the one before, without waiting for you to pass the document back. If
 your handler does **not** store a document (you reject the edit, or an `await` before storing fails), the editor is not
-told: the screen keeps showing the edit, and later edits are built on it, so it can come back with them. To refuse or
-undo an edit, give the editor new content, for example a copy made through `ContentDocumentSerializer`. Passing the
-same instance back, or a `with` copy that shares the same block contents, redraws nothing.
+told: the screen keeps showing the edit, and later edits are built on it, so it can come back with them. **To revert,
+pass a fresh copy of your previous document**, for example by serializing and deserializing it:
+
+```csharp
+_document = ContentDocumentSerializer.Deserialize(ContentDocumentSerializer.Serialize(previous)).Document!;
+```
+
+Passing the previous instance itself back does nothing: the editor still has it from you, and sees no change. Nor does
+a `with` copy that shares its block contents redraw the text. The redraw that reverts **discards unsent text in that
+place** too.
 
 When you replace `Document` (a reload, a conflict resolution), places whose content is the same by value are left
 alone, so the cursor, undo history and unsent text survive. A place whose content differs is redrawn and **your
@@ -222,8 +229,10 @@ the link address) send their whole value and are capped at 4,000 characters (`ma
 less in all of them except URLs, which has two consequences if you raise `UrlCharacters` above 4000:
 
 - Write mode cannot type or paste a longer address.
-- The link box shows only the first 4,000 characters of a longer stored link, and **applying it would store that
-  shortened address**. Cancel, and edit such a link in Blocks mode.
+- On a longer stored link, the link box says that the address is too long to edit there and shows only its start.
+  **It then applies no address at all**, neither that start nor one typed over it, since it cannot tell the two apart.
+  The link is kept as it is. Edit it in Blocks mode, or use **Remove link** (applying an empty address does the same)
+  and then link the text again.
 
 A stored value that is already longer than a field's cap is shown whole and can be shortened but not extended. Each
 keystroke still sends all of it, so one near 32 KB or more exceeds the default limit.

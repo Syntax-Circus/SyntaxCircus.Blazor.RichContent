@@ -26,5 +26,9 @@ internal static class WriteModeMessages
         "This was not done: some text it would redraw could not be saved and would be lost. "
         + "Shorten or simplify it, or undo, first.";
 
+    public const string LinkTooLong =
+        "This link's address is too long to edit here, and only its start is shown, so nothing in this box can be "
+        + "applied. Edit it in Blocks mode, or use Remove link and then link the text again.";
+
     public const string InsertNotReady = "Nothing was inserted: the text here was still being saved. Try again.";
 }

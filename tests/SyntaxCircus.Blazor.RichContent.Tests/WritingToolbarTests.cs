@@ -199,6 +199,75 @@ public sealed class WritingToolbarTests : IDisposable
         apply.GetAttribute("data-rt-checked").ShouldBe(accepted is null ? null : typed);
     }
 
+    // The script reports only the start of a very long address. Whatever the box holds then may be that start, or the
+    // start with changes, and the host's limit may well accept it.
+    [Theory]
+    [InlineData(null)]
+    [InlineData("https://example.com/the-start-changed")]
+    [InlineData("/an-address-typed-afresh")]
+    public async Task OnALinkTooLongForTheBox_NoAddressIsApplied(string? typed)
+    {
+        var editor = Render(RichContentLimits.Default with { UrlCharacters = 8000 });
+        await Report(editor, At(link: "https://example.com/" + new string('a', 3980)) with { LinkUrlTruncated = true });
+        editor.FindAll("[role=toolbar] button").Single(button => button.TextContent == "Link").Click();
+        editor.Find(".rt-link-box [role=alert]").TextContent.ShouldContain("Blocks mode");
+        if (typed is not null)
+        {
+            editor.Find(".rt-link-box input").Input(typed);
+        }
+
+        // Nothing for the script to apply by itself, in the click or the key press.
+        editor.Find("[data-rt-link-apply]").GetAttribute("data-rt-checked").ShouldBeNull();
+        editor.Find("[data-rt-link-apply]").GetAttribute("data-rt-address").ShouldBeNull();
+        await editor.Find(".rt-link-box input").KeyDownAsync(new KeyboardEventArgs { Key = "Enter" });
+        await editor.Find("[data-rt-link-apply]").ClickAsync(new MouseEventArgs());
+
+        Commands().ShouldBeEmpty();
+        editor.Find(".rt-link-box [role=alert]").TextContent.ShouldContain("Blocks mode");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task OnALinkTooLongForTheBox_ItCanStillBeRemoved(bool withTheButton)
+    {
+        var editor = Render(RichContentLimits.Default with { UrlCharacters = 8000 });
+        await Report(editor, At(link: "/start") with { LinkUrlTruncated = true });
+        editor.FindAll("[role=toolbar] button").Single(button => button.TextContent == "Link").Click();
+
+        if (withTheButton)
+        {
+            await editor.Find("[data-rt-link-remove]").ClickAsync(new MouseEventArgs());
+        }
+        else
+        {
+            editor.Find(".rt-link-box input").Input("");
+            editor.Find("[data-rt-link-apply]").GetAttribute("data-rt-address").ShouldBe("");
+            await editor.Find(".rt-link-box input").KeyDownAsync(new KeyboardEventArgs { Key = "Enter" });
+        }
+
+        Commands().ShouldBe([("link", "")]);
+    }
+
+    // What the box holds came from where it was opened, whatever the cursor has reached since.
+    [Fact]
+    public async Task WhetherTheBoxHoldsOnlyAStart_IsSettledWhenItOpens()
+    {
+        var editor = Render(RichContentLimits.Default with { UrlCharacters = 8000 });
+        await Report(editor, At(link: "/start") with { LinkUrlTruncated = true });
+        editor.FindAll("[role=toolbar] button").Single(button => button.TextContent == "Link").Click();
+
+        await Report(editor, At(link: "/short"));
+        await editor.Find(".rt-link-box input").KeyDownAsync(new KeyboardEventArgs { Key = "Enter" });
+        Commands().ShouldBeEmpty();
+
+        // Opened again where the whole address is known, it works as ever.
+        editor.FindAll("[role=toolbar] button").Single(button => button.TextContent == "Link").Click();
+        editor.FindAll(".rt-link-box [role=alert]").ShouldBeEmpty();
+        await editor.Find(".rt-link-box input").KeyDownAsync(new KeyboardEventArgs { Key = "Enter" });
+        Commands().ShouldBe([("link", "/short")]);
+    }
+
     [Fact]
     public async Task ALinkTheScriptApplied_ClosesTheBox_AndIsNotRunAgain()
     {
