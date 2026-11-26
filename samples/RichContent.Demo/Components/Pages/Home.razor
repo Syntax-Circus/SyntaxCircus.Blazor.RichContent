@@ -22,6 +22,13 @@
         <label><input type="checkbox" id="demo-dark" @bind="_dark" /> Dark theme</label>
     </div>
 
+    <p class="settings">
+        @* demo.js handles this button. Only the script writes to the result element. *@
+        <button type="button" id="demo-too-much" aria-describedby="demo-too-much-hint">Add too much text</button>
+        <span id="demo-too-much-hint">In Write view, click in text, a table cell or a code card first.</span>
+        <output id="demo-too-much-result"></output>
+    </p>
+
     <div class="layout">
         <section class="pane" aria-label="Editor">
             <h2>Editor</h2>

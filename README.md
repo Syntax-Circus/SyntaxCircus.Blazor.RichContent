@@ -527,7 +527,8 @@ dotnet run --project samples/RichContent.Demo
 
 Then open `http://localhost:5199`. One page has the editor, a live preview, the validation errors and the saved JSON.
 You can load several sample documents, disable the editor, lower the content limits and switch between a light and a
-dark theme. Nothing is stored: reloading the page starts again.
+dark theme. **Add too much text** puts more into a writing area than the editor can send, so that you can try the
+unsaved-text warning. Nothing is stored: reloading the page starts again.
 
 **`samples/RichContent.Sample`** is the app the browser tests drive. It has an editor with a live preview, a media
 picker, a `project-card` extension block and the test pages.
