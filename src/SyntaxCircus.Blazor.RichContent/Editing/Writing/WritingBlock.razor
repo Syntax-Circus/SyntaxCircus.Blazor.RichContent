@@ -43,5 +43,18 @@
         </CardFrame>
       </CascadingValue>
     }
+    @if (ErrorsOf(nodes) is { Count: > 0 } errors)
+    {
+      <ul class="errors rt-part-errors" role="alert">
+        @foreach (var error in errors)
+        {
+          <li>@error</li>
+        }
+      </ul>
+    }
+    @if (_refusal is { } refusal && ReferenceEquals(refusal.At, current))
+    {
+      <p class="error rt-refused" role="alert">@refusal.Reason</p>
+    }
   }
 </div>

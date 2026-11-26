@@ -22,6 +22,8 @@ public sealed class WriteModeTests : IDisposable
     {
         _context.Services.AddRichContent();
         _context.Services.AddLogging(logging => logging.AddProvider(_errors));
+        // These tests count the calls, so none is to be repeated while one of them runs.
+        _context.Services.GetRequiredService<RichContentEditorOptions>().ScriptRetryDelay = TimeSpan.FromHours(1);
         _context.JSInterop.Mode = JSRuntimeMode.Loose;
         _module = _context.JSInterop.SetupModule(RichTextSurface.ModulePath);
         _module.Mode = JSRuntimeMode.Loose;
@@ -107,6 +109,9 @@ public sealed class WriteModeTests : IDisposable
                 parameters.Add(editor => editor.DocumentChanged, changed);
             }
         });
+
+    private IRenderedComponent<RichTextSurface> RenderSurface() =>
+        _context.Render<RichTextSurface>(parameters => parameters.Add(surface => surface.Nodes, [Paragraph("first")]));
 
     [Fact]
     public void BlocksMode_LoadsNoScript()
@@ -472,13 +477,14 @@ public sealed class WriteModeTests : IDisposable
             SetOutcome(1, "throws");
         }
 
-        var editor = Render(TwoBlocks());
+        // On its own a surface has nothing to fall back to, and says so itself. (In an editor, see EditorModeTests.)
+        var surface = RenderSurface();
 
-        editor.FindAll(".rt-surface-failed").Count.ShouldBe(3);
-        editor.FindAll("[data-rt-surface]").ShouldBeEmpty();
-        _errors.Entries.OfType<JSException>().Count().ShouldBe(3);
+        surface.Find(".rt-surface-failed");
+        surface.FindAll("[data-rt-surface]").ShouldBeEmpty();
+        _errors.Entries.OfType<JSException>().Count().ShouldBe(1);
         var syncs = _module.Invocations["sync"].Count;
-        editor.Render(parameters => parameters.Add(e => e.Disabled, true));
+        surface.Render(parameters => parameters.Add(e => e.Disabled, true));
         _module.Invocations["sync"].Count.ShouldBe(syncs);
         Faulted.ShouldBeFalse();
     }
@@ -504,10 +510,9 @@ public sealed class WriteModeTests : IDisposable
         }
 
         _module.SetupVoid("dispose", _ => true).SetException(new JSException("dispose failed"));
-        var editor = Render(TwoBlocks());
-        var surface = editor.FindComponents<RichTextSurface>()[0].Instance;
+        var surface = RenderSurface();
 
-        await editor.InvokeAsync(async () => await surface.DisposeAsync());
+        await surface.InvokeAsync(async () => await surface.Instance.DisposeAsync());
 
         _errors.Entries.OfType<JSException>().Select(e => e.Message).ShouldContain("dispose failed");
         Faulted.ShouldBeFalse();

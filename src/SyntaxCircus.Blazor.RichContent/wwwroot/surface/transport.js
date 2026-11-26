@@ -1,7 +1,8 @@
 // Delivers a surface's edits to .NET as patches, in messages small enough for SignalR's default limit.
 //
-// A patch is { generation, order, changed }: every top-level key now in the surface, and the nodes of the keys that
-// are new or differ from the last patch sent. .NET answers true (applied, or from a replaced generation) or false
+// A patch is { generation, order, changed, partial }: every top-level key now in the surface, and the nodes of the
+// keys that are new or differ from the last patch sent. partial is true unless it also carries everything not yet
+// known to have been applied; while .NET has an edit it rejected, it takes no partial one. .NET answers true (applied, or from a replaced generation) or false
 // (rejected: the content cannot be converted). A call that throws did not get through.
 //
 // Whatever is not acknowledged may or may not have reached .NET. So after a failure or a rejection, the next patch
@@ -192,6 +193,7 @@ export function createTransport({ invoke, snapshot, complete = false }) {
             generation,
             order,
             changed: entries.filter(entry => changed.has(entry.key)).map(({ key, node }) => ({ key, node })),
+            partial: !(cumulative || complete),
         }));
         const sequence = ++lastSequence;
         newest = sequence;
@@ -237,6 +239,14 @@ export function createTransport({ invoke, snapshot, complete = false }) {
         // Sends what differs from the last patch, if anything does.
         send(entries) {
             send(entries, false);
+        },
+
+        // Called when what is here may be about to go, as before a rearrangement or a change of view: sends again,
+        // now, whatever is not yet known to have got through, however recently it was sent.
+        settle() {
+            if (records.length > 0) {
+                sendNow();
+            }
         },
 
         // Called before a click or key press is handled: resends anything that may not have got through.

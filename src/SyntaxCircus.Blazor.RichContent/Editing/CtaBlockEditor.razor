@@ -25,7 +25,8 @@
     protected override void OnParametersSet()
     {
         // The same object as last time is no news. Another is the host's, and wins.
-        if (!ReferenceEquals(Block, _parameter))
+        // In the block view the parameter is the truth: an edit the host refused must not come back in Write mode.
+        if (!ReferenceEquals(Block, _parameter) || Session?.Writing != true)
         {
             _parameter = _latest = Block;
         }
@@ -35,7 +36,11 @@
 
     private Task Update(CtaBlock block)
     {
-        _latest = block;
+        if (Session?.Writing == true)
+        {
+            _latest = block;
+        }
+
         return BlockChanged.InvokeAsync(block);
     }
 

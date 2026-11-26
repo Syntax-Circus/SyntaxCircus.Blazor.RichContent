@@ -17,6 +17,65 @@ internal sealed class WritingSession
     /// <summary>True while the editor is in Write mode, which the block editors inside it follow.</summary>
     public bool Writing { get; set; }
 
+    private readonly List<ScriptEditorBase> _rejected = [];
+    private readonly List<ScriptEditorBase> _parts = [];
+
+    public void Join(ScriptEditorBase part) => _parts.Add(part);
+
+    public void Leave(ScriptEditorBase part)
+    {
+        if (_parts.Remove(part))
+        {
+            ReportReadOnly();
+        }
+    }
+
+    /// <summary>
+    /// True once nothing that a script edits can still hold text .NET has not had: each part is read-only in the
+    /// browser, and what it showed then has been sent, or it never could be typed into.
+    /// </summary>
+    public bool AllReadOnly => _parts.TrueForAll(part => part.IsConfirmedReadOnly);
+
+    /// <summary>Raised when <see cref="AllReadOnly"/> may have become true.</summary>
+    public event Action? ReadOnlyChanged;
+
+    public void ReportReadOnly() => ReadOnlyChanged?.Invoke();
+
+    /// <summary>
+    /// The surfaces, table cells and code cards that show something which could not be taken into the document.
+    /// </summary>
+    public IReadOnlyList<ScriptEditorBase> Rejected => _rejected;
+
+    /// <summary>Raised when one starts or stops showing such content. True if it stopped by being disposed.</summary>
+    public event Action<bool>? RejectionsChanged;
+
+    public void SetRejected(ScriptEditorBase part, bool rejected, bool disposed = false)
+    {
+        if (rejected ? _rejected.Contains(part) : !_rejected.Remove(part))
+        {
+            return;
+        }
+
+        if (rejected)
+        {
+            _rejected.Add(part);
+        }
+
+        RejectionsChanged?.Invoke(disposed);
+    }
+
+    /// <summary>True when a part of a writing block, such as a card, shows content the document does not have.</summary>
+    public bool HasRejectedIn(IWritingPart part) => _rejected.Exists(editor => ReferenceEquals(editor.WritingPart, part));
+
+    /// <summary>True when a block, by its id, shows content the document does not have.</summary>
+    public bool HasRejectedInBlock(string? blockId) =>
+        _rejected.Exists(editor => string.Equals(editor.BlockId, blockId, StringComparison.Ordinal));
+
+    /// <summary>Raised when a script of the writing view cannot be loaded or run.</summary>
+    public event Action? ScriptFailed;
+
+    public void ReportScriptFailure() => ScriptFailed?.Invoke();
+
     /// <summary>The surface that last had the cursor, which is the one the toolbar acts on.</summary>
     public RichTextSurface? Surface { get; private set; }
 

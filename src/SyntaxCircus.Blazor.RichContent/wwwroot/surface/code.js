@@ -4,7 +4,7 @@
 // Its text is only ever set as the element's value, and the browser's own editing, undo included, does the rest.
 
 import { createTransport } from './transport.js';
-import { callDotNet } from './surface.js';
+import { callDotNet, isReconnecting } from './surface.js';
 import { isFrozen, whenThawed } from './freeze.js';
 
 const INDENT = '    ';
@@ -19,6 +19,7 @@ function release(card) {
     cards.delete(card.element);
     delete card.element.richContentCode;
     delete card.element.richContentRefresh;
+    delete card.element.richContentSettle;
 }
 
 // An element that was removed can no longer be passed in, so its card is found this way.
@@ -129,10 +130,26 @@ function handleKeydown(card, event) {
     card.leaving = false;
 }
 
+// Whatever is shown and not known to be in the document is sent now: see surface.js.
+function settle(card) {
+    const outstanding = card.transport.unacknowledged > 0;
+    endComposition(card);
+    if (outstanding) {
+        card.transport.settle();
+    }
+}
+
+// Safe to call again for the same element: a card that has been filled is kept, with whatever has been typed since.
 export function attach(element, dotNetRef) {
     releaseRemoved();
-    if (cards.has(element)) {
-        release(cards.get(element));
+    const attached = cards.get(element);
+    if (attached) {
+        if (attached.generation !== null) {
+            attached.dotNetRef = dotNetRef;
+            return;
+        }
+
+        release(attached);
     }
 
     const card = {
@@ -147,7 +164,8 @@ export function attach(element, dotNetRef) {
         listeners: new AbortController(),
     };
     card.transport = createTransport({
-        invoke: (sequence, index, count, chunk) => callDotNet(dotNetRef, 'ReceiveEdit', sequence, index, count, chunk),
+        invoke: (sequence, index, count, chunk) =>
+            callDotNet(card.dotNetRef, 'ReceiveEdit', sequence, index, count, chunk),
         snapshot: () => {
             if (!element.isConnected) {
                 release(card);
@@ -179,7 +197,13 @@ export function attach(element, dotNetRef) {
         card.composing = true;
         compositionChanged(card, true);
     });
-    on(element, 'compositionend', () => endComposition(card));
+    on(element, 'compositionend', () => {
+        if (card.composing) {
+            endComposition(card);
+        } else {
+            flush(card);
+        }
+    });
     on(element, 'blur', () => {
         card.leaving = false;
         endComposition(card);
@@ -194,6 +218,7 @@ export function attach(element, dotNetRef) {
     // For tests.
     element.richContentCode = card;
     element.richContentRefresh = () => applyState(card);
+    element.richContentSettle = () => settle(card);
 }
 
 // With force, sets the text of the given generation, unless the card already has that generation: .NET sends a
@@ -206,6 +231,10 @@ export function sync(element, text, disabled, force, generation) {
         return null;
     }
 
+    if (disabled && !force) {
+        settle(card);
+    }
+
     card.disabled = disabled;
     if (force && generation !== card.generation) {
         if (card.composing) {
@@ -216,7 +245,8 @@ export function sync(element, text, disabled, force, generation) {
     }
 
     applyState(card);
-    return card.generation;
+    // See surface.js.
+    return disabled && !force && isReconnecting() ? null : card.generation;
 }
 
 export function focus(element) {

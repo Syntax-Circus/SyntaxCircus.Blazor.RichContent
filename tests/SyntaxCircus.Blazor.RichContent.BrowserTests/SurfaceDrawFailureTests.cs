@@ -160,7 +160,8 @@ public class SurfaceDrawFailureTests(SampleHost host) : SurfaceTest(host)
 
         await Page.GotoAsync(new Uri(_server.Address, "fixture/everything?mode=write").AbsoluteUri);
 
-        await Expect(Page.Locator(".rt-surface-failed").First).ToBeVisibleAsync(new() { Timeout = 30_000 });
+        // The editor says so and shows the block editor instead.
+        await Expect(Page.Locator(".rt-load-failed")).ToBeVisibleAsync(new() { Timeout = 30_000 });
         await Expect(Page.Locator("textarea[data-rt-code]")).ToHaveCountAsync(0);
         (await WaitForServerFailuresAsync("deliberate first code draw failure")).ShouldBeGreaterThan(0);
         (await Page.EvaluateAsync<bool>("() => window.broken.length > 0 && window.broken.every(e => e.readOnly)")).ShouldBeTrue();
@@ -186,7 +187,7 @@ public class SurfaceDrawFailureTests(SampleHost host) : SurfaceTest(host)
 
         await Page.GotoAsync(new Uri(_server.Address, "fixture/everything?mode=write").AbsoluteUri);
 
-        await Expect(Page.Locator(".rt-surface-failed").First).ToBeVisibleAsync(new() { Timeout = 30_000 });
+        await Expect(Page.Locator(".rt-load-failed")).ToBeVisibleAsync(new() { Timeout = 30_000 });
         await Expect(Page.Locator("[data-rt-surface]")).ToHaveCountAsync(0);
         (await WaitForServerFailuresAsync("deliberate first draw failure")).ShouldBeGreaterThan(0);
         // The elements the script had in hand were not left editable either.

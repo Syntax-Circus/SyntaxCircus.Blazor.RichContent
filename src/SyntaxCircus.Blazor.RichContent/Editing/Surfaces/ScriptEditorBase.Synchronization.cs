@@ -1,0 +1,224 @@
+﻿using Microsoft.Extensions.Logging;
+using Microsoft.JSInterop;
+
+namespace SyntaxCircus.Blazor.RichContent.Editing.Surfaces;
+
+// Getting the browser to hold what it should, and trying again until it does.
+public abstract partial class ScriptEditorBase
+{
+    // One try at getting the browser to hold what it should. What is merely lost, cancelled or disconnected is left to
+    // the watch. A script that throws before anything has ever been drawn cannot be used. One that throws later is a
+    // defect, which is logged, but the author's other work is worth more than the circuit.
+    private async Task Attempt(Func<ValueTask> call)
+    {
+        try
+        {
+            await Interop(call);
+        }
+        catch (JSException exception) when (_confirmedGeneration == 0 && !IsDisposed)
+        {
+            if (!LoadFailed)
+            {
+                _ready = false;
+                LoadFailed = true;
+                StopWatching();
+                Logger.LogError(exception, "The writing editor's script could not be loaded or run.");
+                StateHasChanged();
+                Session?.ReportScriptFailure();
+                Session?.ReportReadOnly();
+            }
+        }
+        catch (JSException exception)
+        {
+            _scriptFailures++;
+            _scriptBroken = true;
+            Logger.LogError(exception, "A call to the writing editor's script failed.");
+            Session?.ReportReadOnly();
+        }
+
+        Settle();
+    }
+
+    // Loads and attaches the script, then draws. Safe to repeat: the script keeps what it has already drawn.
+    private async ValueTask AttachAsync()
+    {
+        if (_module is null)
+        {
+            var imported = await JS.InvokeAsync<IJSObjectReference>("import", ScriptPath);
+            if (IsDisposed)
+            {
+                await imported.DisposeAsync();
+                return;
+            }
+
+            // Another try can have got there first. It is the same module either way.
+            _module ??= imported;
+        }
+
+        var module = _module;
+        _self ??= DotNetObjectReference.Create(this);
+        await module.InvokeVoidAsync("attach", Element, _self, AttachOptions);
+        if (IsDisposed)
+        {
+            return;
+        }
+
+        _ready = true;
+        // Content is taken from the parameters only if none has been sent yet, when nothing can have been typed. Later
+        // ones arrive in OnParametersSetAsync, and outside it they can be older than what has been typed since, as
+        // while renders are held back: a redraw taken from them would undo it.
+        await SyncAsync(redraw: _redraw is null);
+        if (FocusOnStart && !_focused && !IsDisposed)
+        {
+            _focused = true;
+            await LoggingScriptErrors(() => module.InvokeVoidAsync(FocusFunction, Element));
+        }
+    }
+
+    // True while there is something the browser should have and is not known to.
+    private bool Behind =>
+        _started && !IsDisposed && !LoadFailed && (!_ready || RedrawIsUnconfirmed || _syncedDisabled != Disabled);
+
+    // A call that carries a redraw can be lost, cancelled or never answered, and nothing else need ever happen to
+    // send it again. So while the browser is behind, it is tried again on a timer, and the author is told.
+    private void Watch()
+    {
+        if (_watch is null && Behind)
+        {
+            _watch = new CancellationTokenSource();
+            _ = WatchAsync(_watch.Token);
+        }
+    }
+
+    private async Task WatchAsync(CancellationToken cancellation)
+    {
+        try
+        {
+            var delay = Options.ScriptRetryDelay;
+            var longest = delay * 8;
+            while (true)
+            {
+                await Task.Delay(delay, cancellation);
+                if (!Behind)
+                {
+                    break;
+                }
+
+                // A redraw waits for a composition to end, which is the author's doing and nothing to report.
+                if (!Stalled && !IsComposing)
+                {
+                    Stalled = true;
+                    StateHasChanged();
+                }
+
+                if (_scriptFailures < ScriptAttempts)
+                {
+                    // Not awaited: a call that never answers must not stop the next try.
+                    _ = RetryAsync();
+                }
+
+                delay = delay * 2 < longest ? delay * 2 : longest;
+            }
+
+            Settle();
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception exception)
+        {
+            await DispatchExceptionAsync(exception);
+        }
+    }
+
+    private async Task RetryAsync()
+    {
+        try
+        {
+            await Attempt(AttachAsync);
+        }
+        catch (Exception exception)
+        {
+            // Nothing awaits this, so an unexpected failure has to be handed over to be seen.
+            await DispatchExceptionAsync(exception);
+        }
+    }
+
+    // Tries again at once, as the author asked.
+    private protected Task TryAgainAsync()
+    {
+        _scriptFailures = 0;
+        var tried = Behind ? RetryAsync() : Task.CompletedTask;
+        Watch();
+        return tried;
+    }
+
+    private void Settle()
+    {
+        if (!Behind && !IsDisposed)
+        {
+            StopWatching();
+        }
+    }
+
+    private void StopWatching()
+    {
+        _watch?.Cancel();
+        _watch?.Dispose();
+        _watch = null;
+        _scriptFailures = 0;
+        if (Stalled && !IsDisposed)
+        {
+            Stalled = false;
+            StateHasChanged();
+        }
+    }
+
+    // Sends Disabled and, with a new redraw or while the last one is unconfirmed, the content. The script ignores
+    // a redraw it already has, so sending one again cannot overwrite what has been typed since.
+    private async ValueTask SyncAsync(bool redraw)
+    {
+        if (redraw)
+        {
+            // From here on, edits made against the old content are not applied.
+            _redraw = ResetContent();
+            AppliedSequence = 0;
+        }
+
+        if (_module is not { } module)
+        {
+            return;
+        }
+
+        var disabled = Disabled;
+        var generation = ContentGeneration;
+        var withContent = RedrawIsUnconfirmed;
+        var number = ++_syncs;
+        if (!disabled)
+        {
+            _confirmedReadOnly = false;
+        }
+
+        // The answer is the generation the browser then has. It is not this one if the redraw had to wait. Before
+        // answering that it is read-only, the script sends again whatever may not have arrived, so that has been
+        // handled by the time the answer is.
+        var held = await module.InvokeAsync<int?>(
+            "sync", Element, withContent ? _redraw : null, disabled, withContent, generation);
+        if (held is not null)
+        {
+            _syncedDisabled = disabled;
+            _scriptBroken = false;
+            // Only the latest answer says how the browser is now.
+            if (disabled && number == _syncs)
+            {
+                _confirmedReadOnly = true;
+                Session?.ReportReadOnly();
+            }
+        }
+
+        if (held == generation)
+        {
+            Confirm(generation);
+        }
+    }
+}

@@ -53,6 +53,7 @@ function release(surface) {
     surfaces.delete(surface.element);
     delete surface.element.richContentSurface;
     delete surface.element.richContentRefresh;
+    delete surface.element.richContentSettle;
 }
 
 // An element that was removed can no longer be passed in, so its surface is found this way.
@@ -110,7 +111,7 @@ const RECONNECT_STATES = ['show', 'failed', 'rejected', 'paused', 'resume-failed
 
 // Read from what Blazor does to its reconnect element, not from whether it can be seen, which is up to the host's
 // styles. Wrongly believing the connection to be down would hold edits back for ever.
-function isReconnecting() {
+export function isReconnecting() {
     const element = document.getElementById('components-reconnect-modal');
     if (!element) {
         return false;
@@ -278,10 +279,28 @@ function endComposition(surface) {
     }
 }
 
+// Whatever is on screen and not known to be in the document is sent now, text still being composed included. For
+// when the surface may be about to stop taking input, or to go: what is sent now reaches .NET before whatever asked.
+function settle(surface) {
+    const outstanding = surface.transport.unacknowledged > 0;
+    endComposition(surface);
+    if (outstanding) {
+        surface.transport.settle();
+    }
+}
+
+// Safe to call again for the same element, as .NET does when it cannot tell that an earlier call arrived: a surface
+// that has been drawn is kept, with whatever has been typed in it since.
 export function attach(element, dotNetRef, options) {
     releaseRemoved();
-    if (surfaces.has(element)) {
-        release(surfaces.get(element));
+    const attached = surfaces.get(element);
+    if (attached) {
+        if (attached.generation !== null) {
+            attached.dotNetRef = dotNetRef;
+            return;
+        }
+
+        release(attached);
     }
 
     const inline = options?.profile === 'inline';
@@ -303,7 +322,7 @@ export function attach(element, dotNetRef, options) {
     };
     surface.transport = createTransport({
         invoke: (sequence, index, count, chunk) =>
-            callDotNet(dotNetRef, 'ReceiveEdit', sequence, index, count, chunk),
+            callDotNet(surface.dotNetRef, 'ReceiveEdit', sequence, index, count, chunk),
         snapshot: () => {
             if (!element.isConnected) {
                 release(surface);
@@ -338,7 +357,14 @@ export function attach(element, dotNetRef, options) {
         surface.composing = true;
         compositionChanged(surface, true);
     });
-    on(element, 'compositionend', () => endComposition(surface));
+    on(element, 'compositionend', () => {
+        if (surface.composing) {
+            endComposition(surface);
+        } else {
+            // It was settled while the composition went on, and the input method has had its last word since.
+            flush(surface);
+        }
+    });
     on(element, 'focusout', event => {
         if (!element.contains(event.relatedTarget)) {
             endComposition(surface);
@@ -424,6 +450,7 @@ export function attach(element, dotNetRef, options) {
     // For tests.
     element.richContentSurface = surface;
     element.richContentRefresh = () => applyState(surface);
+    element.richContentSettle = () => settle(surface);
 }
 
 // With force, redraws the surface from keyedNodes ([{ key, node }]) of the given generation, unless it already
@@ -437,6 +464,11 @@ export function sync(element, keyedNodes, disabled, force, generation) {
         return null;
     }
 
+    if (disabled && !force) {
+        // Before it stops taking input. A change of view starts this way, and the surface goes with the view.
+        settle(surface);
+    }
+
     surface.disabled = disabled;
     if (force && generation !== surface.generation) {
         if (surface.composing) {
@@ -448,7 +480,9 @@ export function sync(element, keyedNodes, disabled, force, generation) {
     }
 
     applyState(surface);
-    return surface.generation;
+    // While the connection still shows as down, what was just sent again has not gone. So .NET is not answered that
+    // the surface is read-only, and asks again.
+    return disabled && !force && isReconnecting() ? null : surface.generation;
 }
 
 // Runs a writing command where the surface's selection is, or last was: bold, italic, code, link (with an address,
@@ -498,19 +532,23 @@ function insert(element, choice) {
 
     flush(surface);
     const after = surface.reader.keyThrough(childAtEnd(element, range));
-    const sent = surface.transport.newest;
     // This surface is about to be rewritten, or the author's attention to go to what is inserted. So nothing more is
     // typed here, or anywhere in the editor until the result is drawn, and the toolbar lets go of it.
     leave(surface);
     element.blur();
     freeze(element.closest('[data-rt-editor]'));
-    callDotNet(surface.dotNetRef, 'InsertRequested', choice, after, sent).catch(() => {});
+    // Read last: freezing sends again what may not have got through.
+    callDotNet(surface.dotNetRef, 'InsertRequested', choice, after, surface.transport.newest).catch(() => {});
 }
 
+// The toolbar areas already wired.
+const toolbarAreas = new WeakSet();
+
 // area holds the toolbar and, while it is open, the link box. toolbarRef is the toolbar's component, and key names it
-// to detachToolbar.
+// to detachToolbar. Safe to call again for the same area.
 export function attachToolbar(area, toolbarRef, key) {
-    if (area) {
+    if (area && !toolbarAreas.has(area)) {
+        toolbarAreas.add(area);
         wireFreeze(area, key, number => callDotNet(toolbarRef, 'Redraw', number), isReconnecting);
         wireToolbar(area, { run: command, restore, link });
         wireInsert(area, choice => {

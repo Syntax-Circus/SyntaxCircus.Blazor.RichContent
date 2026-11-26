@@ -72,5 +72,7 @@ internal sealed record KeyedNode(string Key, SurfaceNode Node);
 /// <summary>
 /// An edit from the browser: every top-level key now in the surface, in order, and the nodes for the keys that are
 /// new or changed. <paramref name="Generation"/> is the <see cref="SurfaceBuffer.Generation"/> it was made against.
+/// <paramref name="Partial"/> is true when it carries only what changed since the patch before it, and false when it
+/// also carries everything from earlier patches that the browser does not know to have been applied.
 /// </summary>
-internal sealed record SurfacePatch(int Generation, string[] Order, KeyedNode[] Changed);
+internal sealed record SurfacePatch(int Generation, string[] Order, KeyedNode[] Changed, bool Partial = false);

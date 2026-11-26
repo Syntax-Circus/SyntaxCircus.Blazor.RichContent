@@ -10,4 +10,7 @@ internal interface IInsertPlace
     /// or is not available does nothing.
     /// </summary>
     Task InsertAsync(int choice, int nodesBefore);
+
+    /// <summary>Tells the author why something asked for at this surface was not done.</summary>
+    void Refuse(string reason);
 }

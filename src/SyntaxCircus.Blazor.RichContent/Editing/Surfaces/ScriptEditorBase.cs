@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.Logging;
 using Microsoft.JSInterop;
 using SyntaxCircus.Blazor.RichContent.Editing.Writing;
+using SyntaxCircus.RichContent;
 
 namespace SyntaxCircus.Blazor.RichContent.Editing.Surfaces;
 
@@ -11,8 +12,12 @@ namespace SyntaxCircus.Blazor.RichContent.Editing.Surfaces;
 /// code card. It draws their content there, takes the edits back in messages small enough for SignalR's default
 /// limit, and makes sure that neither is lost. Only this package can derive from it.
 /// </summary>
-public abstract class ScriptEditorBase : ComponentBase, IAsyncDisposable
+public abstract partial class ScriptEditorBase : ComponentBase, IAsyncDisposable
 {
+    // How often a redraw whose script threw is tried again by itself. Whatever else got in its way is retried for as
+    // long as it lasts.
+    private const int ScriptAttempts = 3;
+
     private readonly ChunkAssembler _assembler = new();
     private IJSObjectReference? _module;
     private DotNetObjectReference<ScriptEditorBase>? _self;
@@ -24,13 +29,36 @@ public abstract class ScriptEditorBase : ComponentBase, IAsyncDisposable
     private bool? _syncedDisabled;
     private bool _started;
     private bool _ready;
+    private bool _focused;
+
+    // The generation that was current at the latest rejection.
+    private int _rejectedGeneration;
+
+    // Whether the browser has answered the latest synchronization by saying it is read-only.
+    private bool _confirmedReadOnly;
+    private int _syncs;
+
+    // True while the latest call to a script that had drawn threw: nothing can be asked of it.
+    private bool _scriptBroken;
+
+    // Runs while the browser does not have what it should. Cancelled once it has.
+    private CancellationTokenSource? _watch;
+    private int _scriptFailures;
 
     private protected ScriptEditorBase()
     {
     }
 
+    internal const string BlockIdCascade = "RichContentBlockId";
+
     // The part of a writing block that this edits, or is inside, such as a table cell. Absent outside one.
-    [CascadingParameter] private IWritingPart? WritingPart { get; set; }
+    [CascadingParameter] internal IWritingPart? WritingPart { get; private set; }
+
+    // The block of a ContentDocumentEditor that this is inside, by its id. Absent outside one.
+    [CascadingParameter(Name = BlockIdCascade)] internal string? BlockId { get; private set; }
+
+    // Absent outside a ContentDocumentEditor, as for a surface used on its own.
+    [CascadingParameter] private protected WritingSession? Session { get; private set; }
 
     /// <summary>The element the script edits. The component's markup captures it.</summary>
     private protected ElementReference Element { get; set; }
@@ -38,6 +66,8 @@ public abstract class ScriptEditorBase : ComponentBase, IAsyncDisposable
     [Inject] private IJSRuntime JS { get; set; } = default!;
 
     [Inject] private ILoggerFactory LoggerFactory { get; set; } = default!;
+
+    [Inject] private RichContentEditorOptions Options { get; set; } = default!;
 
     [Parameter] public bool Disabled { get; set; }
 
@@ -51,6 +81,17 @@ public abstract class ScriptEditorBase : ComponentBase, IAsyncDisposable
     internal bool HasRejectedEdit { get; private set; }
 
     private protected bool LoadFailed { get; private set; }
+
+    // False while this has been asked to be read-only and the browser has not confirmed it: until then, text typed
+    // here can still be only in the browser. One never asked, as inside an extension editor that does not pass
+    // Disabled on, is not waited for.
+    internal bool IsConfirmedReadOnly =>
+        !Disabled || !_ready || LoadFailed || IsDisposed || _scriptBroken || _confirmedReadOnly;
+
+    // True while the browser has not had what it should for longer than a round trip takes.
+    private protected bool Stalled { get; private set; }
+
+    private protected RichContentLimits Limits => Session?.Limits ?? RichContentLimits.Default;
 
     private protected bool IsDisposed { get; private set; }
 
@@ -93,9 +134,17 @@ public abstract class ScriptEditorBase : ComponentBase, IAsyncDisposable
         }
 
         var redraw = TakeParameters();
+        if (redraw)
+        {
+            // New content gets its own tries.
+            _scriptFailures = 0;
+        }
+
         if (redraw || RedrawIsUnconfirmed || Disabled != _syncedDisabled)
         {
-            await SynchronizeAsync(redraw);
+            var synchronized = Attempt(() => SyncAsync(redraw));
+            Watch();
+            await synchronized;
         }
     }
 
@@ -109,87 +158,52 @@ public abstract class ScriptEditorBase : ComponentBase, IAsyncDisposable
         }
 
         _started = true;
-        try
-        {
-            await Interop(AttachAsync);
-        }
-        catch (JSException exception)
-        {
-            _ready = false;
-            Logger.LogError(exception, "The writing editor's script could not be loaded or run.");
-            // A seam for falling back to the block editor when the script cannot be loaded or run.
-            LoadFailed = true;
-            StateHasChanged();
-        }
+        Session?.Join(this);
+        var attached = Attempt(AttachAsync);
+        Watch();
+        await attached;
     }
 
-    private async ValueTask AttachAsync()
+    private void Confirm(int generation)
     {
-        var module = await JS.InvokeAsync<IJSObjectReference>("import", ScriptPath);
-        if (IsDisposed)
-        {
-            await module.DisposeAsync();
-            return;
-        }
-
-        _module = module;
-        _self = DotNetObjectReference.Create(this);
-        await module.InvokeVoidAsync("attach", Element, _self, AttachOptions);
-        if (IsDisposed)
+        if (generation <= _confirmedGeneration)
         {
             return;
         }
 
-        _ready = true;
-        await SyncAsync(redraw: true);
-        if (FocusOnStart && !IsDisposed)
+        _confirmedGeneration = generation;
+        // What could not be saved is no longer on screen once content drawn after it is.
+        if (HasRejectedEdit && generation > _rejectedGeneration)
         {
-            await LoggingScriptErrors(() => module.InvokeVoidAsync(FocusFunction, Element));
+            SetRejected(false);
         }
     }
 
-    // Sends Disabled and, with a new redraw or while the last one is unconfirmed, the content. The script ignores
-    // a redraw it already has, so sending one again cannot overwrite what has been typed since.
-    private async ValueTask SyncAsync(bool redraw)
+    private void SetRejected(bool rejected)
     {
-        if (redraw)
+        if (rejected)
         {
-            // From here on, edits made against the old content are not applied.
-            _redraw = ResetContent();
-            AppliedSequence = 0;
+            _rejectedGeneration = ContentGeneration;
         }
 
-        if (_module is not { } module)
+        if (HasRejectedEdit == rejected)
         {
             return;
         }
 
-        var disabled = Disabled;
-        var generation = ContentGeneration;
-        var withContent = RedrawIsUnconfirmed;
-        // The answer is the generation the browser then has. It is not this one if the redraw had to wait.
-        var held = await module.InvokeAsync<int?>(
-            "sync", Element, withContent ? _redraw : null, disabled, withContent, generation);
-        if (held is not null)
-        {
-            _syncedDisabled = disabled;
-        }
-
-        if (held == generation)
-        {
-            Confirm(generation);
-        }
+        HasRejectedEdit = rejected;
+        StateHasChanged();
+        // Raised at once: a click on Save is handled next, and the host must know by then.
+        Session?.SetRejected(this, rejected);
     }
-
-    private void Confirm(int generation) => _confirmedGeneration = Math.Max(_confirmedGeneration, generation);
-
-    private ValueTask SynchronizeAsync(bool redraw) => LoggingScriptErrors(() => SyncAsync(redraw));
 
     private async Task SendRedrawAgainAsync()
     {
         try
         {
-            await SynchronizeAsync(redraw: false);
+            var sent = Attempt(() => SyncAsync(redraw: false));
+            Watch();
+            await sent;
         }
         catch (Exception exception)
         {
@@ -220,6 +234,7 @@ public abstract class ScriptEditorBase : ComponentBase, IAsyncDisposable
         var behind = false;
         try
         {
+            _assembler.MaximumBytes = ChunkAssembler.MaximumBytesFor(Limits);
             if (_assembler.Add(sequence, index, count, chunk) is not { } payload)
             {
                 return Task.FromResult(true);
@@ -235,6 +250,15 @@ public abstract class ScriptEditorBase : ComponentBase, IAsyncDisposable
                 if (edit.Generation == ContentGeneration)
                 {
                     Confirm(edit.Generation);
+                    Settle();
+                }
+
+                // One sent before the browser had heard of a rejection does not carry what was rejected. Taking it
+                // would end the error while that is still on screen and nowhere else. The browser keeps it, and
+                // sends everything together.
+                if (HasRejectedEdit && edit.Partial)
+                {
+                    return Task.FromResult(false);
                 }
 
                 deliver = edit.Apply();
@@ -243,8 +267,9 @@ public abstract class ScriptEditorBase : ComponentBase, IAsyncDisposable
         catch (Exception exception) when (exception is FormatException or JsonException or ArgumentException
             or InvalidOperationException or NotSupportedException)
         {
-            // Seam: what is on screen cannot be converted, so the document is behind it until a later edit applies.
-            HasRejectedEdit = true;
+            // What is on screen cannot be converted, so the document is behind it until a later edit applies.
+            Logger.LogDebug(exception, "An edit could not be taken into the document.");
+            SetRejected(true);
             return Task.FromResult(false);
         }
 
@@ -262,9 +287,11 @@ public abstract class ScriptEditorBase : ComponentBase, IAsyncDisposable
             return Task.FromResult(false);
         }
 
-        HasRejectedEdit = false;
         AppliedSequence = sequence;
-        return deliver is null ? Task.FromResult(true) : DeliverAsync(deliver);
+        // The host gets the document before it is told that the error has gone.
+        var delivered = deliver is null ? Task.FromResult(true) : DeliverAsync(deliver);
+        SetRejected(false);
+        return delivered;
     }
 
     private async Task<bool> DeliverAsync(Func<Task> deliver)
@@ -296,9 +323,8 @@ public abstract class ScriptEditorBase : ComponentBase, IAsyncDisposable
             ? LoggingScriptErrors(() => module.InvokeVoidAsync(function, [Element, .. arguments])).AsTask()
             : Task.CompletedTask;
 
-    // For calls on a component that has started, and for disposal. A script that threw is a defect: it is logged as
-    // an error, but the author's other work is worth more than the circuit. Starting does not use this, so that a
-    // component that cannot start says so.
+    // For calls that are neither starting nor drawing. A script that threw is a defect: it is logged as an error,
+    // but the author's other work is worth more than the circuit.
     private async ValueTask LoggingScriptErrors(Func<ValueTask> call)
     {
         try
@@ -343,6 +369,10 @@ public abstract class ScriptEditorBase : ComponentBase, IAsyncDisposable
 
         IsDisposed = true;
         GC.SuppressFinalize(this);
+        StopWatching();
+        Session?.Leave(this);
+        // Its error goes only with what was on screen, which goes now.
+        Session?.SetRejected(this, false, disposed: true);
         OnDisposing();
         try
         {
@@ -360,5 +390,5 @@ public abstract class ScriptEditorBase : ComponentBase, IAsyncDisposable
     }
 
     /// <summary>An edit read from the browser. Apply returns what raises the change, or null if nothing changed.</summary>
-    private protected readonly record struct ReceivedEdit(int Generation, Func<Func<Task>?> Apply);
+    private protected readonly record struct ReceivedEdit(int Generation, Func<Func<Task>?> Apply, bool Partial = false);
 }

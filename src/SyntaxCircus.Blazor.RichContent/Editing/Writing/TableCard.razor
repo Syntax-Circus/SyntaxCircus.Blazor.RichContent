@@ -51,6 +51,13 @@
   // The latest node: what was passed in, with every edit since. Edits from the cells must build on one another.
   private RichTextNode Current => _node ?? Node;
 
+  [CascadingParameter] private WritingSession? Session { get; set; }
+
+  [CascadingParameter] private IWritingPart? WritingPart { get; set; }
+
+  // A cell that could not be saved holds something, whatever is stored for it.
+  private bool HasUnsaved => WritingPart is { } part && Session?.HasRejectedIn(part) == true;
+
   private ImmutableArray<RichTextNode> Rows => CellsOf(Current);
 
   private bool HasHeader => Rows.Length > 0 && CellsOf(Rows[0]) is { Length: > 0 } first && first.All(cell => cell.Header == true);
@@ -92,8 +99,8 @@
   private Task RemoveRow() =>
     Rows.Length < 2 ? Task.CompletedTask : Update(Current with { Children = RichTextEditorOperations.Remove(Rows, Rows.Length - 1) });
 
-  private bool LastRowHoldsSomething() => Rows.Length > 0 && !WritingContent.IsEmpty(Rows[^1]);
+  private bool LastRowHoldsSomething() => HasUnsaved || (Rows.Length > 0 && !WritingContent.IsEmpty(Rows[^1]));
 
   private bool LastColumnHoldsSomething() =>
-    Rows.Any(row => CellsOf(row) is { Length: > 0 } cells && !WritingContent.IsEmpty(cells[^1]));
+    HasUnsaved || Rows.Any(row => CellsOf(row) is { Length: > 0 } cells && !WritingContent.IsEmpty(cells[^1]));
 }

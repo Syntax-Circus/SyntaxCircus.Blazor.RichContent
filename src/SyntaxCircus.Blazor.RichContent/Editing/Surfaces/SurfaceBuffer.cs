@@ -21,6 +21,12 @@ internal sealed class SurfaceBuffer(bool inline = false)
     // Never restarts, so a key cannot come to mean another node. The browser must name its own keys differently.
     private long _lastKey;
 
+    /// <summary>
+    /// The most top-level nodes a patch may list. Never to be less than the default limit, so that content within a
+    /// host's raised limit can be sent.
+    /// </summary>
+    public int MaximumNodes { get; set; } = RichContentLimits.Default.Nodes;
+
     /// <summary>Counts the calls to <see cref="Reset"/>. A patch made against another generation cannot be applied.</summary>
     public int Generation { get; private set; }
 
@@ -65,7 +71,7 @@ internal sealed class SurfaceBuffer(bool inline = false)
             throw new FormatException($"The patch is for generation {patch.Generation}, not {Generation}.");
         }
 
-        if (patch.Order.Length > RichContentLimits.Default.Nodes)
+        if (patch.Order.Length > MaximumNodes)
         {
             throw new FormatException("The patch has too many nodes.");
         }

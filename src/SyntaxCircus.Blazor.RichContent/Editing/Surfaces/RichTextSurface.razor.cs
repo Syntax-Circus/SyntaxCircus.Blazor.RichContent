@@ -22,9 +22,6 @@ public partial class RichTextSurface
     // What the buffer holds, and the browser too once the latest redraw has reached it.
     private ImmutableArray<RichTextNode> _current = [];
 
-    // Absent for a surface used on its own, which has no toolbar to keep informed.
-    [CascadingParameter] private WritingSession? Session { get; set; }
-
     /// <summary>Where Insert puts things for this surface; null where nothing can be inserted, as in a table cell.</summary>
     [CascadingParameter] internal IInsertPlace? InsertPlace { get; private set; }
 
@@ -80,9 +77,10 @@ public partial class RichTextSurface
 
     private protected override ReceivedEdit ReadEdit(string payload)
     {
+        _buffer.MaximumNodes = Math.Max(RichContentLimits.Default.Nodes, Limits.Nodes);
         var patch = JsonSerializer.Deserialize<SurfacePatch>(payload, JsonSerializerOptions.Web)
             ?? throw new FormatException("There is no patch.");
-        return new(patch.Generation, () => Apply(patch));
+        return new(patch.Generation, () => Apply(patch), patch.Partial);
     }
 
     private Func<Task>? Apply(SurfacePatch patch)
@@ -155,13 +153,27 @@ public partial class RichTextSurface
     /// the cursor, or is null with the cursor before them all. <paramref name="sent"/> is the sequence number of the
     /// newest edit the browser has sent since it was drawn, or 0. For the script only.
     /// </summary>
-    /// <remarks>Inserting redraws this surface. So nothing is done unless everything typed here has been applied.</remarks>
+    /// <remarks>
+    /// Inserting redraws this surface. So nothing is done unless everything typed here has been applied, and the
+    /// author is told why.
+    /// </remarks>
     [JSInvokable]
     public async Task InsertRequested(int choice, string? afterKey, long sent)
     {
-        if (IsDisposed || Disabled || InsertPlace is not { } place || HasRejectedEdit || RedrawIsUnconfirmed
-            || (sent != 0 && sent != AppliedSequence) || _buffer.CountThrough(afterKey) is not { } before)
+        if (IsDisposed || Disabled || InsertPlace is not { } place)
         {
+            return;
+        }
+
+        if (HasRejectedEdit)
+        {
+            place.Refuse(WriteModeMessages.RearrangeRefused);
+            return;
+        }
+
+        if (RedrawIsUnconfirmed || (sent != 0 && sent != AppliedSequence) || _buffer.CountThrough(afterKey) is not { } before)
+        {
+            place.Refuse(WriteModeMessages.InsertNotReady);
             return;
         }
 

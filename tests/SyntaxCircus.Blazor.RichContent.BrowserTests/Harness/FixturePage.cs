@@ -32,6 +32,11 @@ public static class FixturePage
             .ToBeAttachedAsync(new() { Timeout = TimeoutMilliseconds });
         await Expect(page.Locator("[data-rt-surface]:not([data-rt-ready])"))
             .ToHaveCountAsync(0, new() { Timeout = TimeoutMilliseconds });
+        // In an editor, nothing can be typed until the toolbar's script, loaded apart, has it and has been released.
+        await page.WaitForFunctionAsync(
+            "() => [...document.querySelectorAll('.doc-editor[data-rt-editor]')].every(e => e.richContentFreeze?.frozen === false)",
+            null,
+            new() { Timeout = TimeoutMilliseconds });
     }
 
     /// <summary>

@@ -11,9 +11,14 @@ const FIRST_REPEAT = 500;
 const LONGEST_REPEAT = 5000;
 const DRAWN = 'data-rt-drawn';
 
+// An editor in Write mode whose toolbar has not started counts as frozen: until then a click that rearranges it
+// could freeze nothing. A toolbar that starts begins frozen, so that anything clicked before it did is drawn first.
+
 // By the editor's element: only for editors whose toolbar has started and is still there. The editor's element stays
 // when its mode changes, while its toolbar goes and comes back, so what is kept here belongs to a toolbar.
 const editors = new WeakMap();
+// By the editor's element: what waits for it to be able to take input.
+const waiting = new WeakMap();
 // The same states by their toolbar's own key, which can name a toolbar whose elements have already gone.
 const toolbars = new Map();
 
@@ -22,17 +27,24 @@ const editorOf = element => element.closest('[data-rt-editor]');
 
 export function isFrozen(element) {
     const editor = editorOf(element);
-    return editor !== null && editors.get(editor)?.frozen === true;
+    return editor !== null && (editors.get(editor)?.frozen ?? true);
 }
 
 // Runs the callback now, or once the element's editor can be typed into again.
 export function whenThawed(element, callback) {
     if (isFrozen(element)) {
-        editors.get(editorOf(element)).waiting.push(callback);
+        const editor = editorOf(element);
+        if (!waiting.has(editor)) {
+            waiting.set(editor, []);
+        }
+
+        waiting.get(editor).push(callback);
     } else {
         callback();
     }
 }
+
+const SCRIPTED = '[data-rt-surface], [data-rt-code]';
 
 // The fields .NET renders: what is typed in one that is about to go would be lost too.
 const FIELDS = 'textarea:not([data-rt-code]), input:not([type]), input[type="text"], input[type="url"], '
@@ -40,8 +52,32 @@ const FIELDS = 'textarea:not([data-rt-code]), input:not([type]), input[type="tex
 
 // Scripted editors say for themselves whether they can be typed into. See their richContentRefresh.
 function refresh(editor) {
-    for (const element of editor.querySelectorAll('[data-rt-surface], [data-rt-code]')) {
+    for (const element of editor.querySelectorAll(SCRIPTED)) {
         element.richContentRefresh?.();
+    }
+}
+
+// Has them send whatever they show that may not have reached .NET, text being composed included, while they still
+// can. In a click, this is sent before the click is.
+function settle(editor) {
+    for (const element of editor.querySelectorAll(SCRIPTED)) {
+        try {
+            element.richContentSettle?.();
+        } catch (error) {
+            // One that fails must not keep the others, or the freeze, from happening.
+            queueMicrotask(() => {
+                throw error;
+            });
+        }
+    }
+}
+
+// Not while a toolbar is missing from an editor still in Write mode: what waits is for the next one.
+function resume(editor) {
+    if (!editor.hasAttribute('data-rt-editor') || editors.get(editor)?.frozen === false) {
+        for (const callback of waiting.get(editor)?.splice(0) ?? []) {
+            callback();
+        }
     }
 }
 
@@ -53,9 +89,7 @@ function thaw(editor, state) {
     }
 
     refresh(editor);
-    for (const callback of state.waiting.splice(0)) {
-        callback();
-    }
+    resume(editor);
 }
 
 // Forgets a toolbar's wiring: whatever it froze can be typed into again, and it listens and asks no more.
@@ -103,6 +137,7 @@ export function freeze(editor) {
         return;
     }
 
+    settle(editor);
     // A later click needs a later answer.
     state.wanted = ++state.last;
     state.frozen = true;
@@ -137,7 +172,7 @@ export function wireFreeze(area, key, redraw, down) {
     const last = Number(area.getAttribute(DRAWN)) || 0;
     // ask is replaceable, so that tests can lose it.
     const state = {
-        editor, area, key, ask: redraw, down, last, wanted: 0, frozen: false, timer: null, fields: [], waiting: [],
+        editor, area, key, ask: redraw, down, last, wanted: 0, frozen: false, timer: null, fields: [],
         listeners: new AbortController(),
     };
     editors.set(editor, state);
@@ -161,6 +196,13 @@ export function wireFreeze(area, key, redraw, down) {
             freeze(editor);
         }
     }, { capture: true, signal: state.listeners.signal });
+    // Anything clicked before now was sent before this asks, so the page that answers shows what came of it.
+    freeze(editor);
+    if (!state.frozen) {
+        // The connection is down, so nothing is on its way.
+        refresh(editor);
+        resume(editor);
+    }
 }
 
 // For a toolbar that is being disposed. Once this has returned, nothing asks anything of it.

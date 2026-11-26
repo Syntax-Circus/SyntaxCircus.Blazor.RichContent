@@ -20,6 +20,14 @@
   {
     @* The script owns the text, so none is ever rendered into it. It is read-only until the script has filled it. *@
     <textarea @ref="Element" class="rt-code-input" data-rt-code aria-label="Code" readonly rows="8" spellcheck="false" autocomplete="off" autocapitalize="off"></textarea>
+    @if (Stalled)
+    {
+      <p class="rt-surface-stalled" role="status">@WriteModeMessages.Stalled <button type="button" @onclick="TryAgainAsync">Try again now</button></p>
+    }
+    @if (HasRejectedEdit)
+    {
+      <p class="error rt-surface-error" role="alert">@WriteModeMessages.Unconvertible</p>
+    }
     <p class="hint">Tab inserts spaces. Press Escape, then Tab, to leave.</p>
   }
 </div>

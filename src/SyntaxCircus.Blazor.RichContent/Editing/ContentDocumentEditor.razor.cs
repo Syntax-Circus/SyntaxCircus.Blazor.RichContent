@@ -15,8 +15,6 @@ public partial class ContentDocumentEditor
 
     private ILookup<int?, RichContentError> _errorsByBlock = Array.Empty<RichContentError>().ToLookup(e => e.BlockIndex);
     private IReadOnlyList<RichContentError> _errors = [];
-    private IReadOnlyList<RichContentError> _lastPublished = [];
-    private bool _errorsPublished;
     private ContentDocument? _lastValidated;
     private RichContentLimits? _lastValidatedLimits;
 
@@ -29,6 +27,8 @@ public partial class ContentDocumentEditor
 
     private List<EmptyPlace> _places = [];
 
+    private bool _blockRefused;
+
     [Inject] private ContentBlockRegistry Registry { get; set; } = default!;
 
     [Inject] private RichContentEditorOptions Options { get; set; } = default!;
@@ -40,11 +40,20 @@ public partial class ContentDocumentEditor
     [Parameter] public bool Disabled { get; set; }
 
     /// <summary>
-    /// <see cref="RichContentEditorMode.Write"/> edits prose as continuous text. It needs interactive rendering, and
-    /// a <see cref="DocumentChanged"/> handler that stores the document before its first incomplete await, as
-    /// <c>@bind-Document</c> does.
+    /// The view: bind it with <c>@bind-Mode</c> to follow the author's choice. <see cref="RichContentEditorMode.Write"/>
+    /// edits prose as continuous text. It needs interactive rendering, and a <see cref="DocumentChanged"/> handler that
+    /// stores the document before its first incomplete await, as <c>@bind-Document</c> does. A change takes effect once
+    /// the browser has shown the editor read-only, so that nothing typed is lost. It is refused while something on
+    /// screen could not be saved, and <see cref="ModeChanged"/> then gives the view still shown. The editor shows the
+    /// block view if Write mode's script cannot be loaded, and raises <see cref="ModeChanged"/>.
     /// </summary>
     [Parameter] public RichContentEditorMode Mode { get; set; } = RichContentEditorMode.Blocks;
+
+    /// <summary>Raised when the view changes other than because <see cref="Mode"/> did, or a change was refused.</summary>
+    [Parameter] public EventCallback<RichContentEditorMode> ModeChanged { get; set; }
+
+    /// <summary>Whether to offer the Write and Blocks switch. It works while the editor is disabled.</summary>
+    [Parameter] public bool ShowModeSwitch { get; set; } = true;
 
     [Parameter] public string Label { get; set; } = "Post body";
 
@@ -57,7 +66,7 @@ public partial class ContentDocumentEditor
     private ContentDocument? _parameter;
     private ContentDocument? _latest;
 
-    private ContentDocument Latest => Mode == RichContentEditorMode.Write && _latest is not null ? _latest : Document;
+    private ContentDocument Latest => Writing && _latest is not null ? _latest : Document;
 
     private ImmutableArray<ContentBlock> Blocks => Document?.Blocks.IsDefault ?? true ? [] : Document.Blocks;
 
@@ -87,32 +96,49 @@ public partial class ContentDocumentEditor
     protected override async Task OnParametersSetAsync()
     {
         _session.Limits = Limits ?? RichContentLimits.Default;
-        _session.Writing = Mode == RichContentEditorMode.Write;
+        TakeMode();
+        _session.Writing = Writing;
 
         if (!ReferenceEquals(Document, _parameter))
         {
             _parameter = _latest = Document;
         }
 
-        // Validation walks the whole tree; skip it when neither the (immutable) document nor the limits changed.
-        if (Document is null || (ReferenceEquals(Document, _lastValidated) && Equals(Limits, _lastValidatedLimits)))
+        if (Document is null)
         {
             return;
         }
 
-        _lastValidated = Document;
-        _lastValidatedLimits = Limits;
-        _errors = RichContentRules.Validate(Document, Limits);
-        _errorsByBlock = _errors.ToLookup(e => e.BlockIndex);
-        if (!_errorsPublished || !_errors.SequenceEqual(_lastPublished))
+        // Validation walks the whole tree; skip it when neither the (immutable) document nor the limits changed.
+        if (!ReferenceEquals(Document, _lastValidated) || !Equals(Limits, _lastValidatedLimits))
         {
-            _errorsPublished = true;
-            _lastPublished = _errors;
-            await ErrorsChanged.InvokeAsync(_errors);
+            _lastValidated = Document;
+            _lastValidatedLimits = Limits;
+            _errors = RichContentRules.Validate(Document, Limits);
+            _errorsByBlock = _errors.ToLookup(e => e.BlockIndex);
         }
+
+        await PublishErrorsAsync();
     }
 
-    private IReadOnlyList<RichContentError> ErrorsFor(int index) => [.. _errorsByBlock[index]];
+    // The block's errors that are not already shown beside one of its surfaces or cards.
+    private List<RichContentError> ErrorsFor(int index, ContentBlock block)
+    {
+        List<RichContentError> errors = [.. _errorsByBlock[index]];
+        var nodes = block switch
+        {
+            RichTextBlock rich => rich.Nodes,
+            CalloutBlock callout => callout.Nodes,
+            _ => [],
+        };
+        if (Writing && errors.Count > 0 && !nodes.IsDefaultOrEmpty)
+        {
+            var beside = NodeErrors.For(nodes, _session.Limits);
+            errors.RemoveAll(error => beside.Contains(error.Message));
+        }
+
+        return errors;
+    }
 
     // Duplicate keys throw, and duplicate ids are a validation error the editor must still display.
     private object KeyFor(ContentBlock block, int index) =>
@@ -120,7 +146,12 @@ public partial class ContentDocumentEditor
 
     private Task Update(ContentDocument document)
     {
-        _latest = document;
+        // In the block view the next edit builds on what the host passes back, which may refuse this one.
+        if (Writing)
+        {
+            _latest = document;
+        }
+
         return DocumentChanged.InvokeAsync(document);
     }
 
@@ -128,7 +159,7 @@ public partial class ContentDocumentEditor
     // since they were drawn: an edit or a click then must not reach whatever is at the old index.
     private int IndexOfDrawn(int index, Type type, string id)
     {
-        if (Mode != RichContentEditorMode.Write)
+        if (!Writing)
         {
             return index;
         }
@@ -150,19 +181,28 @@ public partial class ContentDocumentEditor
     private Task MoveBlock(int index, ContentBlock drawn, int delta)
     {
         var at = IndexOfDrawn(index, drawn);
-        return at < 0 ? Task.CompletedTask : Update(ContentDocumentOperations.Move(Latest, at, delta));
+        return at < 0 || CouldRedrawUnsaved() ? Task.CompletedTask : Update(ContentDocumentOperations.Move(Latest, at, delta));
     }
 
     private Task RemoveBlock(int index, ContentBlock drawn)
     {
         var at = IndexOfDrawn(index, drawn);
-        return at < 0 ? Task.CompletedTask : Update(ContentDocumentOperations.Remove(Latest, at));
+        return at < 0 || CouldRedrawUnsaved() ? Task.CompletedTask : Update(ContentDocumentOperations.Remove(Latest, at));
+    }
+
+    // Blocks whose ids are not unique are keyed by their position, so that moving one draws others again.
+    private bool CouldRedrawUnsaved()
+    {
+        _blockRefused = _session.Rejected.Count > 0
+            && Blocks.Select(block => block.Id).Distinct(StringComparer.Ordinal).Count() != Blocks.Length;
+        return _blockRefused;
     }
 
     private bool HoldsSomething(int index, ContentBlock drawn)
     {
         var at = IndexOfDrawn(index, drawn);
-        return at >= 0 && !WritingContent.IsEmpty(Latest.Blocks[at]);
+        // What could not be saved is stored nowhere, and is only to be lost on purpose.
+        return at >= 0 && (_session.HasRejectedInBlock(drawn.Id) || !WritingContent.IsEmpty(Latest.Blocks[at]));
     }
 
     // An edit from a writing surface. Nothing here may await first: see ScriptEditorBase.ReceiveEdit.
@@ -216,7 +256,7 @@ public partial class ContentDocumentEditor
         {
             var before = gap > 0 ? blocks[gap - 1] : null;
             var after = gap < blocks.Length ? blocks[gap] : null;
-            if (Mode == RichContentEditorMode.Write && before is not RichTextBlock && after is not RichTextBlock)
+            if (Writing && before is not RichTextBlock && after is not RichTextBlock)
             {
                 // A place between the same neighbours as last time is the same place. Its id is the one the block
                 // will have, so it is also its key, before and after.
@@ -230,6 +270,16 @@ public partial class ContentDocumentEditor
             {
                 shown.Add(new(after, gap, KeyFor(after, gap), IsPlace: false));
             }
+        }
+
+        // A place that shows what could not be saved stays, whatever has become of its neighbours.
+        foreach (var place in _places.Where(old => !places.Contains(old) && _session.HasRejectedInBlock(old.Id)
+            && !blocks.Any(block => block.Id == old.Id)))
+        {
+            places.Add(place);
+            var gap = IndexOf(place);
+            var at = shown.FindIndex(entry => !entry.IsPlace && entry.Index >= gap);
+            shown.Insert(at < 0 ? shown.Count : at, new(new RichTextBlock(place.Id, []), -1, place.Id, IsPlace: true));
         }
 
         _places = places;
@@ -259,7 +309,7 @@ public partial class ContentDocumentEditor
     {
         [nameof(ExtensionBlockEditorBase.Data)] = extension.Data,
         [nameof(ExtensionBlockEditorBase.DataChanged)] = EventCallback.Factory.Create<System.Text.Json.JsonElement>(this, data => Replace(index, extension with { Data = data })),
-        [nameof(ExtensionBlockEditorBase.Disabled)] = Disabled,
+        [nameof(ExtensionBlockEditorBase.Disabled)] = ReadOnly,
     };
 
     private string TitleOf(ContentBlock block) => block switch

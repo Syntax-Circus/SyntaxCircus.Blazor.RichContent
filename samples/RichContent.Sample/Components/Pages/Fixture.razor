@@ -17,6 +17,7 @@
             <button type="button" id="save" @onclick="Save">Save</button>
             <button type="button" id="replace-same" @onclick="ReplaceSame">Replace with an equal copy</button>
             <button type="button" id="replace-other" @onclick="ReplaceOther">Replace with different content</button>
+            <button type="button" id="toggle-disabled" @onclick="() => _disabled = !(_disabled ?? Disabled)">Disable or enable</button>
         </p>
         <p>
             <button type="button" id="mode-blocks" @onclick="() => _chosen = RichContentEditorMode.Blocks">Switch to blocks</button>
@@ -24,7 +25,7 @@
             <button type="button" id="mode-blocks-later" @onclick="SwitchToBlocksLaterAsync">Switch to blocks shortly</button>
         </p>
         <ContentDocumentEditor Document="_document" DocumentChanged="OnDocumentChanged" ErrorsChanged="OnErrorsChanged"
-                               Mode="EditorMode" Disabled="Disabled" />
+                               Mode="EditorMode" ModeChanged="chosen => _chosen = chosen" Disabled="_disabled ?? Disabled" />
         <p>Changes: <span id="changes">@_changes</span></p>
         <ul id="errors">
             @foreach (var error in _errors)
@@ -53,6 +54,8 @@
     [SupplyParameterFromQuery] public string? Mode { get; set; }
 
     [SupplyParameterFromQuery] public bool Disabled { get; set; }
+
+    private bool? _disabled;
 
     // Chosen on the page, over the one in the address, so that a test can switch a live editor.
     private RichContentEditorMode? _chosen;

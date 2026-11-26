@@ -1,4 +1,5 @@
 ﻿using System.Text;
+using SyntaxCircus.RichContent;
 
 namespace SyntaxCircus.Blazor.RichContent.Editing.Surfaces;
 
@@ -8,7 +9,7 @@ namespace SyntaxCircus.Blazor.RichContent.Editing.Surfaces;
 /// </summary>
 internal sealed class ChunkAssembler
 {
-    private const int MaximumBytes = 2 * 1024 * 1024;
+    private const int SmallestMaximumBytes = 2 * 1024 * 1024;
 
     private readonly StringBuilder _payload = new();
     private long _completed = long.MinValue;
@@ -17,12 +18,24 @@ internal sealed class ChunkAssembler
     private int _next;
     private int _bytes;
 
+    /// <summary>The largest payload taken, in bytes of UTF-8.</summary>
+    public int MaximumBytes { get; set; } = SmallestMaximumBytes;
+
+    /// <summary>
+    /// The largest payload to take under these limits: room for all the text they allow, escaped, and for what
+    /// describes each node, and never less than 2 MiB, which is what the default limits come to. A host that raises
+    /// them must not find that content they allow cannot be sent.
+    /// </summary>
+    public static int MaximumBytesFor(RichContentLimits limits) =>
+        (int)Math.Clamp((4L * limits.TextBytes) + (256L * limits.Nodes), SmallestMaximumBytes, int.MaxValue / 2);
+
     /// <summary>
     /// Returns the whole payload when the last chunk of a sequence arrives, otherwise null. A sequence at or below
     /// the last completed one is a resend and is ignored. Index 0 starts again, dropping anything unfinished.
     /// </summary>
     /// <exception cref="FormatException">
-    /// A chunk is missing or out of order, or the payload is over 2 MiB of UTF-8. The unfinished payload is dropped.
+    /// A chunk is missing or out of order, or the payload is over <see cref="MaximumBytes"/>. The unfinished payload
+    /// is dropped.
     /// </exception>
     public string? Add(long sequence, int index, int count, string chunk)
     {

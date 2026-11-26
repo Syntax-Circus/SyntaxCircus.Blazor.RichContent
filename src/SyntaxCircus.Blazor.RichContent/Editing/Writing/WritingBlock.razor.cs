@@ -28,6 +28,8 @@ public partial class WritingBlock
         public IReadOnlyList<InsertChoice> Choices => owner.InsertChoices;
 
         public Task InsertAsync(int choice, int nodesBefore) => owner.InsertAsync(this, choice, nodesBefore);
+
+        public void Refuse(string reason) => owner.Refuse(this, reason);
     }
 
     private List<Part> _parts = [];
@@ -38,6 +40,12 @@ public partial class WritingBlock
 
     // The node Insert made last, whose card takes the focus when it appears.
     private RichTextNode? _inserted;
+
+    // What was last asked for and not done, shown where it was asked.
+    private (Part At, string Reason)? _refusal;
+
+    // Absent for a writing block used outside a ContentDocumentEditor.
+    [CascadingParameter] private WritingSession? Session { get; set; }
 
     [Inject] private RichContentEditorOptions Options { get; set; } = default!;
 
@@ -78,6 +86,7 @@ public partial class WritingBlock
         }
 
         _parameter = incoming;
+        _refusal = null;
         if (_parts.Count == 0 || !SameObjects(incoming.AsSpan(), _nodes.AsSpan()))
         {
             Commit(incoming, Plan(incoming, replaced: true));
@@ -155,7 +164,16 @@ public partial class WritingBlock
 
                 var segment = segments[index];
                 var now = nodes.Slice(segment.Start, segment.Count);
-                var found = unused.FindIndex(old => old.Part.Kind == segment.Kind && matches(old.Nodes, now, segment.Kind));
+                bool IsMatch((Part Part, ImmutableArray<RichTextNode> Nodes) old) =>
+                    old.Part.Kind == segment.Kind && matches(old.Nodes, now, segment.Kind);
+
+                // Of those that would do, one that shows what could not be saved, so that it is not the one left out.
+                var found = replaced ? unused.FindIndex(old => IsMatch(old) && ShowsUnsaved(old.Part)) : -1;
+                if (found < 0)
+                {
+                    found = unused.FindIndex(IsMatch);
+                }
+
                 if (found >= 0)
                 {
                     parts[index] = unused[found].Part;
@@ -175,16 +193,28 @@ public partial class WritingBlock
         }
     }
 
+    private bool ShowsUnsaved(Part part) => part.Surface is { HasRejectedEdit: true } || Session?.HasRejectedIn(part) == true;
+
+    private void Refuse(Part at, string reason)
+    {
+        _refusal = (at, reason);
+        StateHasChanged();
+    }
+
     // Moves nodes about on the author's behalf. False, changing nothing, if that would redraw or drop a surface which
-    // shows something that could not be converted, and so exists only on screen.
-    private bool TryRearrange(ImmutableArray<RichTextNode> nodes)
+    // shows something that could not be converted, and so exists only on screen. The reason is then shown at the part
+    // that asked. A card the author removes goes with whatever it shows: they were asked first.
+    private bool TryRearrange(ImmutableArray<RichTextNode> nodes, Part asked)
     {
         var plan = Plan(nodes, replaced: false);
         var kept = plan.Select(entry => entry.Part).ToHashSet();
         if (_parts.Exists(part => !kept.Contains(part) && part.Surface is { HasRejectedEdit: true }))
         {
+            _refusal = (asked, WriteModeMessages.RearrangeRefused);
             return false;
         }
+
+        _refusal = null;
 
         // The components of the parts left out stay alive until a render, which can be held back. From here on
         // nothing they send can be stored, so none of it may be acknowledged.
@@ -204,6 +234,9 @@ public partial class WritingBlock
         JsonSerializer.Serialize(nodes, ContentDocumentSerializer.Options);
 
     private ImmutableArray<RichTextNode> Slice(int start, int count) => _nodes.Slice(start, count);
+
+    private IReadOnlyList<string> ErrorsOf(ImmutableArray<RichTextNode> nodes) =>
+        Session is { } session ? NodeErrors.For(nodes, session.Limits) : [];
 
     // Where a part's nodes begin, or -1 for a part that is no longer shown.
     private int StartOf(Part part)
@@ -241,7 +274,8 @@ public partial class WritingBlock
     }
 
     private bool HoldsSomething(Part part) =>
-        StartOf(part) is var start && start >= 0 && (part.Kind == SegmentKind.Locked || !WritingContent.IsEmpty(_nodes[start]));
+        StartOf(part) is var start && start >= 0
+        && (part.Kind == SegmentKind.Locked || ShowsUnsaved(part) || !WritingContent.IsEmpty(_nodes[start]));
 
     private Task MoveCard(Part part, int delta)
     {
@@ -251,7 +285,7 @@ public partial class WritingBlock
             return Task.CompletedTask;
         }
 
-        return TryRearrange(RichTextEditorOperations.Move(_nodes, start, delta))
+        return TryRearrange(RichTextEditorOperations.Move(_nodes, start, delta), part)
             ? NodesChanged.InvokeAsync(_nodes)
             : Task.CompletedTask;
     }
@@ -259,7 +293,7 @@ public partial class WritingBlock
     private Task RemoveCard(Part part)
     {
         var start = StartOf(part);
-        return !Disabled && start >= 0 && TryRearrange(_nodes.RemoveAt(start))
+        return !Disabled && start >= 0 && TryRearrange(_nodes.RemoveAt(start), part)
             ? NodesChanged.InvokeAsync(_nodes)
             : Task.CompletedTask;
     }
@@ -283,8 +317,9 @@ public partial class WritingBlock
         if (choice.NodeKind is { } kind)
         {
             var node = RichTextEditorOperations.Create(kind);
-            if (!TryRearrange(_nodes.Insert(at, node)))
+            if (!TryRearrange(_nodes.Insert(at, node), part))
             {
+                StateHasChanged();
                 return;
             }
 
@@ -295,8 +330,9 @@ public partial class WritingBlock
         {
             // Between two nodes, the ones from here on go to a block of their own, after the new one. This lets go
             // of them first, so that nothing a surface sends meanwhile can bring them back here.
-            if (at > 0 && at < _nodes.Length && !TryRearrange([.. _nodes.AsSpan(0, at)]))
+            if (at > 0 && at < _nodes.Length && !TryRearrange([.. _nodes.AsSpan(0, at)], part))
             {
+                StateHasChanged();
                 return;
             }
 
