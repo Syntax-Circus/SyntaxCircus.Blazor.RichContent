@@ -12,7 +12,7 @@ else
        role="textbox" aria-multiline="true" aria-label="@Label"></div>
   @if (Stalled)
   {
-    <p class="rt-surface-stalled" role="status">@WriteModeMessages.Stalled <button type="button" @onclick="TryAgainAsync">Try again now</button></p>
+    <p class="rt-surface-stalled" role="status">@StalledMessage <button type="button" @onclick="TryAgainAsync">Try again now</button></p>
   }
   @if (HasRejectedEdit)
   {

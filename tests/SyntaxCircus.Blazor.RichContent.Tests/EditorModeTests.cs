@@ -543,6 +543,66 @@ public sealed class EditorModeTests : IDisposable
     }
 
     [Theory]
+    [InlineData("surface", "Try again now")]
+    [InlineData("surface", "new parameters")]
+    [InlineData("code", "Try again now")]
+    [InlineData("code", "new parameters")]
+    public async Task ARedrawThatGoesOnThrowing_SaysThatItIsNoLongerTried_AndCanStillBeRecovered(string part, string by)
+    {
+        SetUpScript();
+        RetryAfter(TimeSpan.FromMilliseconds(20));
+        var code = part == "code";
+        var module = code ? _context.JSInterop.SetupModule(CodeCard.ModulePath) : _module;
+        if (code)
+        {
+            module.Mode = JSRuntimeMode.Loose;
+            module.Setup<int?>("sync", invocation => (int)invocation.Arguments[4]! == 1).SetResult(1);
+        }
+
+        ContentDocument Holding(string text) => OneBlock(code ? Code(text) : Paragraph(text));
+        var editor = Render(Holding("first"));
+        // Something that could not be saved is on screen until the redraw below is known to have been drawn.
+        await SendAsync(
+            editor, code ? editor.FindComponent<CodeCard>().Instance : Surfaces(editor)[0], "not a patch");
+        module.Setup<int?>("sync", invocation => (int)invocation.Arguments[4]! == 2).SetException(new JSException("cannot draw"));
+        editor.Render(parameters => parameters.Add(e => e.Document, Holding("from the host")));
+
+        var notice = code ? "[data-rt-card=code] .rt-surface-stalled" : ".rt-surface-stalled";
+        editor.WaitForAssertion(
+            () => editor.Find(notice).TextContent.ShouldNotContain("Trying again"), TimeSpan.FromSeconds(10));
+        editor.Find(notice).TextContent.ShouldContain("Try again now");
+        // Nothing goes on trying.
+        var calls = module.Invocations["sync"].Count;
+        await Task.Delay(TimeSpan.FromMilliseconds(500), Xunit.TestContext.Current.CancellationToken);
+        module.Invocations["sync"].Count.ShouldBe(calls);
+        Codes().ShouldContain(Unconvertible, "the host must still hold back its save");
+        _context.Renderer.UnhandledException.IsCompleted.ShouldBeFalse();
+
+        // Asked to try while it still throws, it says that it is trying, and gives up as before.
+        editor.Find(notice + " button").Click();
+        editor.Find(notice).TextContent.ShouldContain("Trying again");
+        editor.WaitForAssertion(
+            () => editor.Find(notice).TextContent.ShouldNotContain("Trying again"), TimeSpan.FromSeconds(10));
+
+        var healed = module.Setup<int?>("sync", invocation => (int)invocation.Arguments[4]! >= 2);
+        healed.SetResult(by == "new parameters" && !code ? 3 : 2);
+        if (by == "Try again now")
+        {
+            editor.Find(notice + " button").Click();
+        }
+        else
+        {
+            // Equal content in new objects, which needs no new drawing but is cause to send the last one again.
+            healed.SetResult(2);
+            editor.Render(parameters => parameters.Add(e => e.Document, Holding("from the host")));
+        }
+
+        editor.WaitForAssertion(() => editor.FindAll(notice).ShouldBeEmpty(), TimeSpan.FromSeconds(10));
+        editor.WaitForAssertion(() => Codes().ShouldNotContain(Unconvertible));
+        _context.Renderer.UnhandledException.IsCompleted.ShouldBeFalse();
+    }
+
+    [Theory]
     [InlineData("disconnected")]
     [InlineData("cancelled")]
     [InlineData("hangs")]

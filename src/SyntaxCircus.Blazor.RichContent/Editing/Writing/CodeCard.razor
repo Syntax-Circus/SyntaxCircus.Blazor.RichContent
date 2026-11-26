@@ -22,7 +22,7 @@
     <textarea @ref="Element" class="rt-code-input" data-rt-code aria-label="Code" readonly rows="8" spellcheck="false" autocomplete="off" autocapitalize="off"></textarea>
     @if (Stalled)
     {
-      <p class="rt-surface-stalled" role="status">@WriteModeMessages.Stalled <button type="button" @onclick="TryAgainAsync">Try again now</button></p>
+      <p class="rt-surface-stalled" role="status">@StalledMessage <button type="button" @onclick="TryAgainAsync">Try again now</button></p>
     }
     @if (HasRejectedEdit)
     {

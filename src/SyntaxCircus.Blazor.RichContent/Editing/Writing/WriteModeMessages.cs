@@ -13,6 +13,9 @@ internal static class WriteModeMessages
     public const string Stalled =
         "The latest content could not be shown here, so it cannot be edited yet. Trying again.";
 
+    public const string GaveUp =
+        "The latest content could not be shown here, so it cannot be edited yet. Automatic retries have stopped.";
+
     public const string ToolsStalled = "The writing tools have not loaded yet, so the text cannot be edited. Trying again.";
 
     public const string LoadFailed =

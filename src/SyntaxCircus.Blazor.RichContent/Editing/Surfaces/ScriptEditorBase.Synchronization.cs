@@ -85,6 +85,12 @@ public abstract partial class ScriptEditorBase
         if (_watch is null && Behind)
         {
             _watch = new CancellationTokenSource();
+            if (_gaveUp)
+            {
+                _gaveUp = false;
+                StateHasChanged();
+            }
+
             _ = WatchAsync(_watch.Token);
         }
     }
@@ -111,12 +117,14 @@ public abstract partial class ScriptEditorBase
                     StateHasChanged();
                 }
 
-                if (!_scriptBroken || failing++ < ScriptAttempts)
+                if (_scriptBroken && failing++ >= ScriptAttempts)
                 {
-                    // Not awaited: a call that never answers must not stop the next try.
-                    _ = RetryAsync();
+                    GiveUp();
+                    return;
                 }
 
+                // Not awaited: a call that never answers must not stop the next try.
+                _ = RetryAsync();
                 delay = delay * 2 < longest ? delay * 2 : longest;
             }
 
@@ -129,6 +137,16 @@ public abstract partial class ScriptEditorBase
         {
             await DispatchExceptionAsync(exception);
         }
+    }
+
+    // Ends the watch with the browser still behind. The notice stays, and no longer says that it is being tried.
+    private void GiveUp()
+    {
+        _watch?.Dispose();
+        _watch = null;
+        _gaveUp = true;
+        Stalled = true;
+        StateHasChanged();
     }
 
     private async Task RetryAsync()
@@ -177,6 +195,7 @@ public abstract partial class ScriptEditorBase
         _watch?.Cancel();
         _watch?.Dispose();
         _watch = null;
+        _gaveUp = false;
         if (Stalled && !IsDisposed)
         {
             Stalled = false;

@@ -14,8 +14,9 @@ namespace SyntaxCircus.Blazor.RichContent.Editing.Surfaces;
 /// </summary>
 public abstract partial class ScriptEditorBase : ComponentBase, IAsyncDisposable
 {
-    // How often the watch tries again while the script itself throws. Whatever else gets in the way is retried for as
-    // long as it lasts. Other parameters, and the author, can always cause another try.
+    // How often the watch tries again while the script itself throws, after which it says so and ends. Whatever else
+    // gets in the way is retried for as long as it lasts. Other parameters, and the author, can always cause another
+    // try, and a new watch.
     private const int ScriptAttempts = 3;
 
     private readonly ChunkAssembler _assembler = new();
@@ -94,6 +95,11 @@ public abstract partial class ScriptEditorBase : ComponentBase, IAsyncDisposable
 
     // True while the browser has not had what it should for longer than a round trip takes.
     private protected bool Stalled { get; private set; }
+
+    // True from when the watch runs out of tries until something starts another or the browser catches up.
+    private bool _gaveUp;
+
+    private protected string StalledMessage => _gaveUp ? WriteModeMessages.GaveUp : WriteModeMessages.Stalled;
 
     private protected RichContentLimits Limits => Session?.Limits ?? RichContentLimits.Default;
 

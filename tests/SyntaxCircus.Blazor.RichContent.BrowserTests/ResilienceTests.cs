@@ -991,6 +991,42 @@ public class LoadFailureTests(SampleHost host) : CardTest(host)
     }
 
     [Fact]
+    public async Task ALaterRedrawThatGoesOnFailing_SaysThatRetriesHaveStopped_UntilTriedAgain()
+    {
+        await FixturePage.OpenAsync(Page, _server.Address, "everything", "write");
+        var surface = Surface("prose");
+        await surface.EvaluateAsync(
+            """
+            element => {
+                element.replaceChildren = () => { throw new Error('deliberate lasting draw failure'); };
+                window.heal = () => delete element.replaceChildren;
+            }
+            """);
+
+        await Page.Locator("#replace-other").ClickAsync();
+
+        var notice = Page.Locator("[data-block-id=prose] .rt-surface-stalled").First;
+        await Expect(notice).ToContainTextAsync("Trying again.", new() { Timeout = 30_000 });
+        // At the delays the package uses, the tries run out after about half a minute.
+        await Expect(notice).ToContainTextAsync("Automatic retries have stopped.", new() { Timeout = 60_000 });
+        await Expect(notice).Not.ToContainTextAsync("Trying again.");
+        await Expect(surface).ToHaveAttributeAsync("contenteditable", "false");
+
+        // Healed, and nothing happens until the author asks.
+        await Page.EvaluateAsync("() => window.heal()");
+        await Task.Delay(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
+        await Expect(surface).ToHaveAttributeAsync("contenteditable", "false");
+        await notice.GetByRole(AriaRole.Button, new() { Name = "Try again now" }).ClickAsync();
+
+        await Expect(surface).ToHaveAttributeAsync("contenteditable", "true", new() { Timeout = 30_000 });
+        await Expect(Page.Locator(".rt-surface-stalled")).ToHaveCountAsync(0);
+        await PlaceCaretAsync(surface.Locator(":scope > p").First);
+        await Page.Keyboard.TypeAsync(" Kept.");
+        TextOf(Nodes(await SaveAsync(Page), "prose")[0]).ShouldBe(Fixtures.ReplacementText + " Kept.");
+        _server.Log.TakeFailures();
+    }
+
+    [Fact]
     public async Task ALaterRedrawThatFails_IsShown_AndPutRightByItself()
     {
         await FixturePage.OpenAsync(Page, _server.Address, "everything", "write");

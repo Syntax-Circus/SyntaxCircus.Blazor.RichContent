@@ -217,7 +217,8 @@ or to content that would be nested more than 8 levels deep, even if your `Limits
   connection or a slow one does not cause the fallback.
 - A Write editor's surfaces and code cards cannot be typed into until the toolbar's script is ready, at least one
   round trip after the page becomes interactive. While a script or a redraw is late, a "Trying again" notice is
-  shown.
+  shown. If a surface or code card that has already drawn goes on failing because its script throws, automatic retries
+  stop after a few attempts; the notice then says so, and **Try again now** or new content from your code tries again.
 - Switching to Blocks does not change the message size limit of Blocks mode (below): a very large paragraph written in
   Write mode can drop the connection if it is then edited in Blocks mode.
 
