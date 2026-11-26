@@ -1,0 +1,56 @@
+@page "/faults"
+@inject IConfiguration Configuration
+
+@* Server-side failures on demand, so the browser tests can show that they notice each one. Off unless Sample:Faults is set. *@
+
+<main id="faults" data-interactive="@(_interactive ? "true" : "false")">
+    @if (Configuration.GetValue<bool>("Sample:Faults"))
+    {
+        <button type="button" id="throw" @onclick="Throw">Throw in an event handler</button>
+        <button type="button" id="throw-later" @onclick="ThrowLater">Throw after a delay</button>
+        <button type="button" id="remove-child" @onclick="() => _showChild = false">Remove the child</button>
+        @if (ForeignImage == true)
+        {
+            @* In the prerendered HTML, so a strict policy blocks it while the page loads. *@
+            <img src="https://blocked.invalid/image.png" alt="" />
+        }
+        @* Interactive only: prerendering disposes components too, and the fault is meant for the circuit. *@
+        @if (_interactive && _showChild && Disposal is not null)
+        {
+            <FaultyDisposal Kind="@Disposal" />
+        }
+    }
+    else
+    {
+        <p>Not found.</p>
+    }
+</main>
+
+@code {
+    private bool _interactive;
+    private bool _showChild = true;
+
+    /// <summary>Renders a child whose disposal fails: <c>throw</c> or <c>js</c>. See <c>FaultyDisposal</c>.</summary>
+    [SupplyParameterFromQuery] public string? Disposal { get; set; }
+
+    /// <summary>Adds an image from another origin to the page.</summary>
+    [SupplyParameterFromQuery] public bool? ForeignImage { get; set; }
+
+    protected override void OnAfterRender(bool firstRender)
+    {
+        if (firstRender)
+        {
+            _interactive = true;
+            StateHasChanged();
+        }
+    }
+
+    private static void Throw() => throw new InvalidOperationException("Deliberate fault: event handler.");
+
+    // Fails well after the click has been handled and the browser has gone quiet.
+    private static async Task ThrowLater()
+    {
+        await Task.Delay(500);
+        throw new InvalidOperationException("Deliberate fault: after a delay.");
+    }
+}

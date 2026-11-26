@@ -1,0 +1,10 @@
+@namespace RichContent.Demo
+@using System.Text.Json
+
+<div class="project-card"><strong>@Name</strong></div>
+
+@code {
+    [Parameter] public JsonElement Data { get; set; }
+
+    private string Name => Data.ValueKind == JsonValueKind.Object && Data.TryGetProperty("name", out var name) ? name.GetString() ?? "" : "";
+}

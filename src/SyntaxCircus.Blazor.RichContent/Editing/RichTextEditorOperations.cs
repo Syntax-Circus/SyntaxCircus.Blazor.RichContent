@@ -112,6 +112,18 @@ public static class RichTextEditorOperations
             ? table with { Children = [.. ChildrenOf(table).Select(row => row with { Children = ChildrenOf(row).RemoveAt(ChildrenOf(row).Length - 1) })] }
             : table;
 
+    /// <summary>Marks every cell of the first row as a header cell, or as not one. Other rows are left as they are.</summary>
+    public static RichTextNode SetTableHeaderRow(RichTextNode table, bool header)
+    {
+        var rows = ChildrenOf(table);
+        return rows.Length == 0
+            ? table
+            : table with
+            {
+                Children = rows.SetItem(0, rows[0] with { Children = [.. ChildrenOf(rows[0]).Select(cell => cell with { Header = header })] }),
+            };
+    }
+
     private static ImmutableArray<RichTextNode> ChildrenOf(RichTextNode node) => node.Children.IsDefault ? [] : node.Children;
 
     /// <summary>

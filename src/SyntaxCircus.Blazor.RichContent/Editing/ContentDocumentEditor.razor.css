@@ -1,26 +1,132 @@
+/*
+ * Every colour comes from a custom property a host can set on the editor or on anything around it: --rt-border,
+ * --rt-muted, --rt-accent, --rt-error, --rt-surface, --rt-button-bg and --rt-button-text. The defaults are mixed from
+ * the host's own text colour, so they stay readable on light and dark pages: currentColor in them is the colour where
+ * the property is used, not here.
+ *
+ * Scripts make part of what is styled here, and other components render the rest, which ::deep reaches.
+ * Inside a writing surface only space and lines are set, apart from the colour of links: its weights and slants belong
+ * to the script, and anything inherited that is set there can be copied into the text by the browser's editing
+ * commands. Nothing here is !important, and nothing touches how a surface takes input.
+ */
 .doc-editor {
-    display: grid;
+    --_rt-border: var(--rt-border, color-mix(in srgb, currentColor 28%, transparent));
+    --_rt-muted: var(--rt-muted, color-mix(in srgb, currentColor 80%, transparent));
+    --_rt-accent: var(--rt-accent, color-mix(in srgb, currentColor 60%, #2563eb));
+    --_rt-error: var(--rt-error, color-mix(in srgb, currentColor 40%, #e5484d));
+    /* Not a grid: a sticky toolbar cannot leave its own grid row. */
+    display: flex;
+    flex-direction: column;
     gap: .75rem;
 }
 
-.hint {
+/*
+ * Buttons and fields, a media picker's and an extension editor's among them. In a layer, so that any rule of the
+ * host's own that is not in one wins, whatever its specificity.
+ */
+@layer rich-content-editor {
+    .doc-editor ::deep button {
+        font: inherit;
+        font-size: .9em;
+        line-height: 1.25;
+        padding: .25rem .7rem;
+        color: var(--rt-button-text, currentColor);
+        background-color: var(--rt-button-bg, color-mix(in srgb, currentColor 8%, transparent));
+        border: 1px solid var(--_rt-border);
+        border-radius: .375rem;
+        cursor: pointer;
+    }
+
+    .doc-editor ::deep button:disabled {
+        opacity: .5;
+        cursor: default;
+    }
+
+    .doc-editor ::deep button[aria-pressed="true"] {
+        background-color: color-mix(in srgb, var(--_rt-accent) 22%, transparent);
+        border-color: var(--_rt-accent);
+    }
+
+    .doc-editor ::deep input:not([type]),
+    .doc-editor ::deep input[type="text"],
+    .doc-editor ::deep textarea,
+    .doc-editor ::deep select {
+        font: inherit;
+        padding: .35rem .5rem;
+        color: inherit;
+        background-color: color-mix(in srgb, currentColor 4%, transparent);
+        border: 1px solid var(--_rt-border);
+        border-radius: .375rem;
+    }
+
+    /* A list that opens is drawn apart from the page, over a background of the browser's. */
+    .doc-editor ::deep option {
+        color: CanvasText;
+        background-color: Canvas;
+    }
+
+    .doc-editor ::deep input[type="checkbox"] {
+        accent-color: var(--_rt-accent);
+    }
+}
+
+.doc-editor ::deep button {
+    min-height: 2.25rem;
+}
+
+.doc-editor ::deep .hint {
     margin: 0;
-    color: #526078;
+    color: var(--_rt-muted);
     font-size: .9rem;
 }
 
-.error {
+.doc-editor ::deep .error {
     margin: 0;
-    color: #8b2917;
+    color: var(--_rt-error);
+}
+
+.doc-editor ::deep .errors {
+    margin: 0;
+    padding-left: 1.25rem;
+    color: var(--_rt-error);
+}
+
+/* Why something was not done, or could not be saved or loaded: set apart from the messages of the content rules. */
+.doc-editor ::deep .rt-load-failed,
+.doc-editor ::deep .rt-switch-refused,
+.doc-editor ::deep .rt-refused,
+.doc-editor ::deep .rt-surface-error,
+.doc-editor ::deep .rt-surface-failed {
+    margin: 0;
+    padding: .25rem 0 .25rem .625rem;
+    border-left: 3px solid var(--_rt-error);
+    color: var(--_rt-error);
+}
+
+/* Still being tried. */
+.doc-editor ::deep .rt-surface-stalled,
+.doc-editor ::deep .rt-toolbar-stalled {
+    margin: .25rem 0 0;
+    padding: .25rem 0 .25rem .625rem;
+    border-left: 3px solid var(--_rt-border);
+    color: var(--_rt-muted);
+    font-size: .9rem;
 }
 
 .block {
-    border: 1px solid #b6c7e2;
+    border: 1px solid var(--_rt-border);
     border-radius: .5rem;
     padding: 1rem;
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: .75rem;
     min-width: 0;
+}
+
+/* Somewhere to type that is not yet a block. Only the surface in it shows. */
+.block[data-rt-place] {
+    border-color: transparent;
+    padding-block: 0;
 }
 
 .block > header {
@@ -31,23 +137,17 @@
     gap: .5rem;
 }
 
-.actions {
+.doc-editor ::deep .actions {
     display: flex;
     flex-wrap: wrap;
     gap: .5rem;
 }
 
-.errors {
-    margin: 0;
-    padding-left: 1.25rem;
-    color: #8b2917;
-}
-
-.preserved {
+.doc-editor ::deep .preserved {
     margin: 0;
     padding: .75rem;
-    background: #fff8e8;
-    border: 1px solid #ddc489;
+    background-color: color-mix(in srgb, currentColor 5%, transparent);
+    border: 1px dashed var(--_rt-border);
     border-radius: .375rem;
 }
 
@@ -58,7 +158,7 @@
 
 .insert-menu > summary {
     cursor: pointer;
-    color: #17489e;
+    color: var(--_rt-accent);
     font-size: .9rem;
 }
 
@@ -68,6 +168,7 @@
 
 .doc-editor ::deep .fields {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: .75rem;
     min-width: 0;
 }
@@ -75,20 +176,20 @@
 .doc-editor ::deep .child {
     display: grid;
     gap: .5rem;
-    border-left: 2px solid #d4dce8;
+    border-left: 2px solid var(--_rt-border);
     padding: .5rem 0 .5rem .75rem;
-}
-
-.doc-editor ::deep .actions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: .5rem;
 }
 
 .doc-editor ::deep label,
 .doc-editor ::deep .field {
     display: grid;
     gap: .35rem;
+}
+
+.doc-editor ::deep label.check {
+    display: flex;
+    align-items: center;
+    gap: .5rem;
 }
 
 .doc-editor ::deep textarea,
@@ -99,12 +200,221 @@
     box-sizing: border-box;
 }
 
-.doc-editor ::deep button {
+/* ---- Write mode ---- */
+
+.rt-mode-switch {
+    display: flex;
+    align-self: flex-start;
+}
+
+.rt-mode-switch ::deep button {
+    border-radius: 0;
+}
+
+.rt-mode-switch ::deep button:first-child {
+    border-radius: .375rem 0 0 .375rem;
+}
+
+.rt-mode-switch ::deep button:last-child {
+    border-radius: 0 .375rem .375rem 0;
+    margin-left: -1px;
+}
+
+.rt-mode-switch ::deep button[aria-pressed="true"] {
+    position: relative;
+    font-weight: 600;
+}
+
+/*
+ * It stays in view while the document scrolls under it. With no --rt-surface there is no colour to give it that is
+ * known to suit the host's text, so what passes under it is blurred instead.
+ */
+.doc-editor ::deep .rt-toolbar-area {
+    position: sticky;
+    top: var(--rt-toolbar-top, 0px);
+    z-index: 2;
+    padding: .5rem 0;
+    background-color: var(--rt-surface, transparent);
+    border-bottom: 1px solid var(--_rt-border);
+    -webkit-backdrop-filter: blur(16px);
+    backdrop-filter: blur(16px);
+}
+
+.doc-editor ::deep .rt-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: .25rem;
+}
+
+.doc-editor ::deep .rt-toolbar button {
+    min-width: 2.25rem;
+    padding-inline: .5rem;
+}
+
+.doc-editor ::deep .rt-toolbar select {
+    width: auto;
     min-height: 2.25rem;
+}
+
+/* On a line of its own, below the buttons. */
+.doc-editor ::deep .rt-insert-menu {
+    display: flex;
+    flex-basis: 100%;
+    flex-wrap: wrap;
+    gap: .25rem;
+    padding-top: .5rem;
+    border-top: 1px dashed var(--_rt-border);
+}
+
+.doc-editor ::deep .rt-link-box {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: .5rem;
+    margin-top: .5rem;
+}
+
+.doc-editor ::deep .rt-link-box label {
+    flex: 1 1 14rem;
+}
+
+.doc-editor ::deep .rt-link-box .error {
+    flex-basis: 100%;
+}
+
+/* A surface has no box of its own: it reads as the text it holds. */
+.doc-editor ::deep .rt-surface {
+    min-height: 1.5em;
+    padding: .25rem .5rem;
+    border-radius: .25rem;
+}
+
+/* With nothing in it, only this shows that it is there. An outline takes no room, so typing moves nothing. */
+.doc-editor ::deep .rt-surface.rt-empty {
+    outline: 1px dashed var(--_rt-border);
+    outline-offset: -1px;
+}
+
+.doc-editor ::deep .rt-surface:focus-visible {
+    outline: 2px solid var(--_rt-accent);
+    outline-offset: -2px;
+}
+
+.doc-editor ::deep .rt-surface :where(p, h2, h3, h4, ul, ol, blockquote) {
+    margin: .75em 0 0;
+}
+
+.doc-editor ::deep .rt-surface :where(li > p:first-child, li > ul, li > ol) {
+    margin-top: 0;
+}
+
+.doc-editor ::deep .rt-surface > :first-child,
+.doc-editor ::deep .rt-surface blockquote > :first-child {
+    margin-top: 0;
+}
+
+.doc-editor ::deep .rt-surface :where(ul, ol) {
+    padding-left: 1.75rem;
+}
+
+.doc-editor ::deep .rt-surface blockquote {
+    padding-left: .75rem;
+    border-left: 3px solid var(--_rt-border);
+}
+
+/* Headings show at the weight of the text while edited, so the smallest needs another mark. */
+.doc-editor ::deep .rt-surface h4 {
+    border-bottom: 1px solid var(--_rt-border);
+}
+
+/* The browser's own link colours are unreadable on a dark page. */
+.doc-editor ::deep .rt-surface a {
+    color: var(--_rt-accent);
+}
+
+/*
+ * Mind what is added around surfaces and cards: a long text is laid out inside it. In WebKit, making the writing block
+ * or a card a grid, or spacing their children with a "* + *" selector (which is tried on every element, those in
+ * surfaces too), made a large paste or code edit freeze the page past SignalR's timeout. So they are plain blocks.
+ */
+.doc-editor ::deep .rt-card {
+    margin-block: .5rem;
+    min-width: 0;
+    padding: .75rem;
+    border: 1px solid var(--_rt-border);
+    border-radius: .375rem;
+    background-color: color-mix(in srgb, currentColor 3%, transparent);
+}
+
+.doc-editor ::deep .rt-card-header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: .5rem;
+    margin-bottom: .625rem;
+}
+
+.doc-editor ::deep .rt-confirm {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: .375rem;
+    padding-left: .5rem;
+    border-left: 3px solid var(--_rt-error);
+}
+
+.doc-editor ::deep textarea.rt-code-input {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    tab-size: 4;
+}
+
+.doc-editor ::deep .rt-locked-text {
+    margin: .5rem 0 0;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+.doc-editor ::deep .rt-image-preview {
+    max-width: 100%;
+    height: auto;
+}
+
+.doc-editor ::deep .rt-table-scroll {
+    overflow-x: auto;
+}
+
+.doc-editor ::deep .rt-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+/* Without the width, a column whose cells are all empty has none, and cannot be clicked. */
+.doc-editor ::deep .rt-table td {
+    min-width: 6rem;
+    padding: 0;
+    vertical-align: top;
+    border: 1px solid var(--_rt-border);
+}
+
+.doc-editor ::deep .rt-table td[data-rt-header] {
+    background-color: color-mix(in srgb, currentColor 10%, transparent);
+}
+
+/* The height is also set by the script, but only once it has attached: a new row must not grow after it is drawn,
+   which would move the buttons under the table. */
+.doc-editor ::deep .rt-table [data-rt-surface] {
+    min-width: 6rem;
+    min-height: 1.5em;
 }
 
 @media (max-width: 480px) {
     .block {
         padding: .75rem;
+    }
+
+    .doc-editor ::deep .rt-card {
+        padding: .5rem;
     }
 }

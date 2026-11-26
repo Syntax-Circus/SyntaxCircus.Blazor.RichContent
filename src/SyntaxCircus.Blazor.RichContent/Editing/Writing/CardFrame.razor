@@ -1,0 +1,33 @@
+@* What every card in Write mode has around it. Cards are moved and removed only with these buttons. *@
+<div class="rt-card" data-rt-card="@Kind" role="group" aria-label="@Title">
+  <div class="rt-card-header">
+    <strong>@Title</strong>
+    <div class="actions">
+      <button type="button" aria-label="Move up" title="Move up" data-rt-rearrange disabled="@(Disabled || !CanMoveUp)" @onclick="() => Moved.InvokeAsync(-1)">↑</button>
+      <button type="button" aria-label="Move down" title="Move down" data-rt-rearrange disabled="@(Disabled || !CanMoveDown)" @onclick="() => Moved.InvokeAsync(1)">↓</button>
+      <RemoveButton Label="Remove" Text="✕" Disabled="Disabled" NeedsConfirmation="NeedsConfirmation" Confirmed="Removed" />
+    </div>
+  </div>
+  @ChildContent
+</div>
+
+@code {
+  [Parameter, EditorRequired] public string Kind { get; set; } = "";
+
+  [Parameter, EditorRequired] public string Title { get; set; } = "";
+
+  [Parameter] public bool Disabled { get; set; }
+
+  [Parameter] public bool CanMoveUp { get; set; }
+
+  [Parameter] public bool CanMoveDown { get; set; }
+
+  /// <summary>Raised with -1 for up or 1 for down.</summary>
+  [Parameter] public EventCallback<int> Moved { get; set; }
+
+  [Parameter] public EventCallback Removed { get; set; }
+
+  [Parameter, EditorRequired] public Func<bool> NeedsConfirmation { get; set; } = () => true;
+
+  [Parameter] public RenderFragment? ChildContent { get; set; }
+}

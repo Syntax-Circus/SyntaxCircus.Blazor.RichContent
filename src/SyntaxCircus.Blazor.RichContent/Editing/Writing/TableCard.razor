@@ -1,0 +1,106 @@
+@using System.Collections.Immutable
+@using SyntaxCircus.Blazor.RichContent.Editing.Surfaces
+
+<div class="fields">
+  <label class="check"><input type="checkbox" checked="@HasHeader" disabled="@(Disabled || Rows.Length == 0)" @onchange="HeaderChanged" />First row is a header</label>
+  <div class="rt-table-scroll">
+    <table class="rt-table">
+      <tbody>
+        @for (var r = 0; r < Rows.Length; r++)
+        {
+          var row = r;
+          var cells = CellsOf(Rows[row]);
+          <tr>
+            @for (var c = 0; c < cells.Length; c++)
+            {
+              var column = c;
+              <td data-rt-header="@(cells[column].Header == true)">
+                <RichTextSurface Profile="RichTextSurfaceProfile.Inline" Nodes="cells[column].Children" Disabled="Disabled"
+                                 NodesChanged="nodes => CellChanged(row, column, nodes)" FocusOnStart="@(FocusOnStart && row == 0 && column == 0)"
+                                 Label="@($"Row {row + 1}, column {column + 1}{(cells[column].Header == true ? ", header" : "")}")" />
+              </td>
+            }
+          </tr>
+        }
+      </tbody>
+    </table>
+  </div>
+  <div class="actions">
+    <button type="button" disabled="@Disabled" @onclick="() => Update(RichTextEditorOperations.AddTableRow(Current))">Add row</button>
+    <RemoveButton Label="Remove last row" Text="Remove last row" Disabled="@(Disabled || Rows.Length < 2)"
+                  NeedsConfirmation="LastRowHoldsSomething" Confirmed="RemoveRow" />
+    <button type="button" disabled="@Disabled" @onclick="() => Update(RichTextEditorOperations.AddTableColumn(Current))">Add column</button>
+    <RemoveButton Label="Remove last column" Text="Remove last column" Disabled="@(Disabled || !RichTextEditorOperations.CanRemoveTableColumn(Current))"
+                  NeedsConfirmation="LastColumnHoldsSomething" Confirmed="() => Update(RichTextEditorOperations.RemoveTableColumn(Current))" />
+  </div>
+</div>
+
+@code {
+  private RichTextNode? _node;
+  private RichTextNode? _parameter;
+
+  [Parameter, EditorRequired] public RichTextNode Node { get; set; } = default!;
+
+  [Parameter] public EventCallback<RichTextNode> NodeChanged { get; set; }
+
+  [Parameter] public bool Disabled { get; set; }
+
+  /// <summary>The first cell takes the focus once it is able to.</summary>
+  [Parameter] public bool FocusOnStart { get; set; }
+
+  // The latest node: what was passed in, with every edit since. Edits from the cells must build on one another.
+  private RichTextNode Current => _node ?? Node;
+
+  [CascadingParameter] private WritingSession? Session { get; set; }
+
+  [CascadingParameter] private IWritingPart? WritingPart { get; set; }
+
+  // A cell that could not be saved holds something, whatever is stored for it.
+  private bool HasUnsaved => WritingPart is { } part && Session?.HasRejectedIn(part) == true;
+
+  private ImmutableArray<RichTextNode> Rows => CellsOf(Current);
+
+  private bool HasHeader => Rows.Length > 0 && CellsOf(Rows[0]) is { Length: > 0 } first && first.All(cell => cell.Header == true);
+
+  private static ImmutableArray<RichTextNode> CellsOf(RichTextNode node) => node.Children.IsDefault ? [] : node.Children;
+
+  protected override void OnParametersSet()
+  {
+    if (!ReferenceEquals(Node, _parameter))
+    {
+      _parameter = _node = Node;
+    }
+  }
+
+  private Task Update(RichTextNode node)
+  {
+    _node = node;
+    return NodeChanged.InvokeAsync(node);
+  }
+
+  // Nothing here may await first: see ScriptEditorBase.ReceiveEdit.
+  private Task CellChanged(int row, int column, ImmutableArray<RichTextNode> nodes)
+  {
+    var rows = Rows;
+    if (row >= rows.Length || column >= CellsOf(rows[row]).Length)
+    {
+      return Task.CompletedTask;
+    }
+
+    var cells = CellsOf(rows[row]);
+    // The content rules ask a cell for a child, if only an empty text run.
+    var content = nodes.IsEmpty ? [RichTextEditorOperations.Create(RichTextNodeKind.Text)] : nodes;
+    var changed = rows[row] with { Children = cells.SetItem(column, cells[column] with { Children = content }) };
+    return Update(Current with { Children = rows.SetItem(row, changed) });
+  }
+
+  private Task HeaderChanged(ChangeEventArgs e) => Update(RichTextEditorOperations.SetTableHeaderRow(Current, e.Value is true));
+
+  private Task RemoveRow() =>
+    Rows.Length < 2 ? Task.CompletedTask : Update(Current with { Children = RichTextEditorOperations.Remove(Rows, Rows.Length - 1) });
+
+  private bool LastRowHoldsSomething() => HasUnsaved || (Rows.Length > 0 && !WritingContent.IsEmpty(Rows[^1]));
+
+  private bool LastColumnHoldsSomething() =>
+    HasUnsaved || Rows.Any(row => CellsOf(row) is { Length: > 0 } cells && !WritingContent.IsEmpty(cells[^1]));
+}

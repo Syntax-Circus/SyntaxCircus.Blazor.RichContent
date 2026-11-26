@@ -1,0 +1,150 @@
+@page "/"
+@using SyntaxCircus.Blazor.RichContent.Editing
+@using SyntaxCircus.Blazor.RichContent.Rendering
+@using SyntaxCircus.RichContent
+
+<PageTitle>Rich content demo</PageTitle>
+
+<main id="demo" class="demo @(_dark ? "dark" : null)" data-interactive="@(_interactive ? "true" : "false")">
+    <h1>Rich content demo</h1>
+
+    <div class="settings" role="group" aria-label="Demo settings">
+        <label for="demo-sample">Sample</label>
+        <select id="demo-sample" value="@_sample.Id" @onchange="ChooseSample">
+            @foreach (var sample in DemoDocuments.All)
+            {
+                <option value="@sample.Id">@sample.Label</option>
+            }
+        </select>
+        <button type="button" id="demo-reset" @onclick="() => Load(_sample)">Reset</button>
+        <label><input type="checkbox" id="demo-disabled" @bind="_disabled" /> Disable the editor</label>
+        <label><input type="checkbox" id="demo-low-limits" @bind="_lowLimits" /> Low content limits</label>
+        <label><input type="checkbox" id="demo-dark" @bind="_dark" /> Dark theme</label>
+    </div>
+
+    <p class="settings">
+        @* demo.js handles this button. Only the script writes to the result element. *@
+        <button type="button" id="demo-too-much" aria-describedby="demo-too-much-hint">Add too much text</button>
+        <span id="demo-too-much-hint">In Write view, click in text, a table cell or a code card first.</span>
+        <output id="demo-too-much-result"></output>
+    </p>
+
+    <div class="layout">
+        <section class="pane" aria-label="Editor">
+            <h2>Editor</h2>
+            <p>View reported by the editor: <strong id="demo-mode">@_mode</strong></p>
+            @{
+                // An editor that is being replaced must not write into the new one's state.
+                var load = _load;
+            }
+            <ContentDocumentEditor @key="load" Document="_document" DocumentChanged="document => TakeDocument(load, document)"
+                                   ErrorsChanged="errors => TakeErrors(load, errors)" @bind-Mode="_mode" Disabled="_disabled" Limits="Limits" />
+
+            <h2>Errors</h2>
+            <ul id="demo-errors" aria-live="polite">
+                @if (_errors.Count == 0)
+                {
+                    <li class="none">No errors</li>
+                }
+                else
+                {
+                    @foreach (var error in _errors)
+                    {
+                        <li><code>@error.Code</code>@(error.BlockId is null ? "" : $" in {error.BlockId}"): @error.Message</li>
+                    }
+                }
+            </ul>
+
+            <p>
+                <button type="button" id="demo-save" @onclick="Save">Save</button>
+                <span id="demo-save-result" role="status">@_saveResult</span>
+            </p>
+            <h2>Last saved JSON</h2>
+            <pre id="demo-saved" tabindex="0" aria-label="Last saved JSON">@_saved</pre>
+        </section>
+
+        <section class="pane" aria-label="Preview">
+            <h2>Preview</h2>
+            @if (_errors.Count > 0)
+            {
+                <p class="note">Blocks with errors are left out of the preview.</p>
+            }
+            <div id="demo-preview">
+                <ContentDocumentView Document="_document" Limits="Limits" />
+            </div>
+        </section>
+    </div>
+</main>
+
+@code {
+    private static readonly RichContentLimits Low = RichContentLimits.Default with { Blocks = 3, TextBytes = 500, UrlCharacters = 40 };
+
+    private DemoSample _sample = DemoDocuments.All[0];
+    private ContentDocument _document = DemoDocuments.All[0].Create();
+    private RichContentEditorMode _mode = RichContentEditorMode.Write;
+    private IReadOnlyList<RichContentError> _errors = [];
+    private int _load;
+    private int _saves;
+    private string _saveResult = "";
+    private string _saved = "";
+    private bool _disabled;
+    private bool _lowLimits;
+    private bool _dark;
+    private bool _interactive;
+
+    private RichContentLimits? Limits => _lowLimits ? Low : null;
+
+    protected override void OnAfterRender(bool firstRender)
+    {
+        if (firstRender)
+        {
+            _interactive = true;
+            StateHasChanged();
+        }
+    }
+
+    private void ChooseSample(ChangeEventArgs e) =>
+        Load(DemoDocuments.All.First(sample => sample.Id == (string?)e.Value));
+
+    // A new editor every time: handing the old one an equal document could keep what it shows.
+    private void Load(DemoSample sample)
+    {
+        _sample = sample;
+        _document = sample.Create();
+        _load++;
+        _errors = [];
+        _saveResult = "";
+        _saved = "";
+    }
+
+    // Stores the document before anything is awaited, as @bind-Document does.
+    private void TakeDocument(int load, ContentDocument document)
+    {
+        if (load == _load)
+        {
+            _document = document;
+        }
+    }
+
+    private void TakeErrors(int load, IReadOnlyList<RichContentError> errors)
+    {
+        if (load == _load)
+        {
+            _errors = errors;
+        }
+    }
+
+    // As the library's documentation asks of a host: nothing is saved while there are errors.
+    private void Save()
+    {
+        if (_errors.Count > 0)
+        {
+            _saveResult = $"Not saved: {_errors.Count} error(s).";
+            _saved = "";
+            return;
+        }
+
+        _saved = ContentDocumentSerializer.Serialize(_document);
+        _saveResult = $"Saved (save {++_saves}).";
+    }
+}

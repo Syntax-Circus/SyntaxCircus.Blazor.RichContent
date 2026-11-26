@@ -1,0 +1,60 @@
+@using SyntaxCircus.Blazor.RichContent.Editing.Surfaces
+
+<div class="rt-writing" role="group" aria-label="@Label">
+  @{
+    var start = 0;
+  }
+  @foreach (var part in _parts)
+  {
+    var current = part;
+    var first = start;
+    var nodes = Slice(first, current.Count);
+    start += current.Count;
+    if (current.Kind == SegmentKind.Surface)
+    {
+      <CascadingValue @key="current" TValue="IInsertPlace" Value="current" IsFixed="true">
+        <CascadingValue TValue="IWritingPart" Value="current" IsFixed="true">
+          <RichTextSurface @ref="current.Surface" Nodes="nodes" NodesChanged="changed => SurfaceChanged(current, changed)" Disabled="Disabled" Label="@Label" />
+        </CascadingValue>
+      </CascadingValue>
+    }
+    else
+    {
+      var node = nodes[0];
+      <CascadingValue @key="current" TValue="IWritingPart" Value="current" IsFixed="true">
+        <CardFrame Kind="@current.Kind.ToString().ToLowerInvariant()" Title="@NameOf(current.Kind)" Disabled="Disabled"
+                   CanMoveUp="first > 0" CanMoveDown="first < _nodes.Length - 1" Moved="delta => MoveCard(current, delta)"
+                   Removed="() => RemoveCard(current)" NeedsConfirmation="() => HoldsSomething(current)">
+          @switch (current.Kind)
+          {
+            case SegmentKind.Code:
+              <CodeCard Node="node" NodeChanged="changed => CardChanged(current, changed)" Disabled="Disabled" FocusOnStart="ReferenceEquals(node, _inserted)" />
+              break;
+            case SegmentKind.Image:
+              <ImageCard Node="node" NodeChanged="changed => CardChanged(current, changed)" Disabled="Disabled" FocusOnStart="ReferenceEquals(node, _inserted)" />
+              break;
+            case SegmentKind.Table:
+              <TableCard Node="node" NodeChanged="changed => CardChanged(current, changed)" Disabled="Disabled" FocusOnStart="ReferenceEquals(node, _inserted)" />
+              break;
+            default:
+              <LockedCard Node="node" />
+              break;
+          }
+        </CardFrame>
+      </CascadingValue>
+    }
+    @if (ErrorsOf(nodes) is { Count: > 0 } errors)
+    {
+      <ul class="errors rt-part-errors" role="alert">
+        @foreach (var error in errors)
+        {
+          <li>@error</li>
+        }
+      </ul>
+    }
+    @if (_refusal is { } refusal && ReferenceEquals(refusal.At, current))
+    {
+      <p class="error rt-refused" role="alert">@refusal.Reason</p>
+    }
+  }
+</div>

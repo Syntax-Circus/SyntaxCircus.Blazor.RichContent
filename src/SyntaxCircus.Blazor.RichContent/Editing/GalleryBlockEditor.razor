@@ -1,18 +1,19 @@
+@using SyntaxCircus.Blazor.RichContent.Editing.Writing
 @using System.Collections.Immutable
 @inject RichContentEditorOptions Options
 <div class="fields">
-    <label>Gallery title<input type="text" value="@Block.Title" @oninput="TitleChanged" disabled="@Disabled" /></label>
+    <label>Gallery title<input type="text" value="@Current.Title" maxlength="@FieldLength" @oninput="TitleChanged" disabled="@Disabled" /></label>
     @for (var i = 0; i < Images.Length; i++)
     {
         var index = i;
         <div class="child">
             <div class="field">Image @(index + 1) <MediaPickerField Value="Images[index].Media" ValueChanged="media => MediaChanged(index, media)" Disabled="Disabled" /></div>
-            <label>Alt text<input type="text" value="@Images[index].Alt" @oninput="e => AltChanged(index, e)" disabled="@Disabled" /></label>
-            <label>Caption<input type="text" value="@Images[index].Caption" @oninput="e => CaptionChanged(index, e)" disabled="@Disabled" /></label>
+            <label>Alt text<input type="text" value="@Images[index].Alt" maxlength="@FieldLength" @oninput="e => AltChanged(index, e)" disabled="@Disabled" /></label>
+            <label>Caption<input type="text" value="@Images[index].Caption" maxlength="@FieldLength" @oninput="e => CaptionChanged(index, e)" disabled="@Disabled" /></label>
             <div class="actions">
-                <button type="button" disabled="@(Disabled || index == 0)" @onclick="() => Move(index, -1)">Move up</button>
-                <button type="button" disabled="@(Disabled || index == Images.Length - 1)" @onclick="() => Move(index, 1)">Move down</button>
-                <button type="button" disabled="@Disabled" @onclick="() => Remove(index)">Remove</button>
+                <button type="button" data-rt-rearrange disabled="@(Disabled || index == 0)" @onclick="() => Move(index, -1)">Move up</button>
+                <button type="button" data-rt-rearrange disabled="@(Disabled || index == Images.Length - 1)" @onclick="() => Move(index, 1)">Move down</button>
+                <button type="button" data-rt-rearrange disabled="@Disabled" @onclick="() => Remove(index)">Remove</button>
             </div>
         </div>
     }
@@ -28,21 +29,56 @@
 
     [Parameter] public bool Disabled { get; set; }
 
-    private ImmutableArray<GalleryImage> Images => Block.Images.IsDefault ? [] : Block.Images;
+    // In Write mode, an edit can arrive before the block with the last one has been passed back down, so each one
+    // must build on the one before.
+    private GalleryBlock? _parameter;
+    private GalleryBlock? _latest;
 
-    private Task Update(ImmutableArray<GalleryImage> images) => BlockChanged.InvokeAsync(Block with { Images = images });
+    [CascadingParameter] private WritingSession? Session { get; set; }
+
+    private GalleryBlock Current => Session?.Writing == true && _latest is not null ? _latest : Block;
+
+    protected override void OnParametersSet()
+    {
+        // The same object as last time is no news. Another is the host's, and wins.
+        // In the block view the parameter is the truth: an edit the host refused must not come back in Write mode.
+        if (!ReferenceEquals(Block, _parameter) || Session?.Writing != true)
+        {
+            _parameter = _latest = Block;
+        }
+    }
+
+    private int? FieldLength => Session?.Writing == true ? WritingSession.FieldCharacters : null;
+
+    private ImmutableArray<GalleryImage> Images => Current.Images.IsDefault ? [] : Current.Images;
+
+    private Task Update(ImmutableArray<GalleryImage> images) => Update(Current with { Images = images });
+
+    private Task Update(GalleryBlock block)
+    {
+        if (Session?.Writing == true)
+        {
+            _latest = block;
+        }
+
+        return BlockChanged.InvokeAsync(block);
+    }
 
     private Task TitleChanged(ChangeEventArgs e) =>
-        BlockChanged.InvokeAsync(Block with { Title = string.IsNullOrEmpty(e.Value?.ToString()) ? null : e.Value!.ToString() });
+        Update(Current with { Title = string.IsNullOrEmpty(e.Value?.ToString()) ? null : e.Value!.ToString() });
 
     private Task Replace(int index, GalleryImage image) => Update(Images.SetItem(index, image));
 
-    private Task MediaChanged(int index, MediaRef? media) => Replace(index, Images[index] with { Media = media ?? new MediaRef("") });
+    private Task MediaChanged(int index, MediaRef? media) =>
+        index < Images.Length ? Replace(index, Images[index] with { Media = media ?? new MediaRef("") }) : Task.CompletedTask;
 
-    private Task AltChanged(int index, ChangeEventArgs e) => Replace(index, Images[index] with { Alt = e.Value?.ToString() ?? "" });
+    private Task AltChanged(int index, ChangeEventArgs e) =>
+        index < Images.Length ? Replace(index, Images[index] with { Alt = e.Value?.ToString() ?? "" }) : Task.CompletedTask;
 
     private Task CaptionChanged(int index, ChangeEventArgs e) =>
-        Replace(index, Images[index] with { Caption = string.IsNullOrEmpty(e.Value?.ToString()) ? null : e.Value!.ToString() });
+        index < Images.Length
+            ? Replace(index, Images[index] with { Caption = string.IsNullOrEmpty(e.Value?.ToString()) ? null : e.Value!.ToString() })
+            : Task.CompletedTask;
 
     private Task Remove(int index) => Update(RichTextEditorOperations.Remove(Images, index));
 

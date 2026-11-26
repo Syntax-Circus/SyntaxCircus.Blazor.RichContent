@@ -1,0 +1,21 @@
+@using SyntaxCircus.Blazor.RichContent.Editing.Writing
+@inherits ScriptEditorBase
+
+@if (LoadFailed)
+{
+  <p class="rt-surface-failed" role="alert">The writing surface could not be loaded.</p>
+}
+else
+{
+  @* The script owns what is inside this element, so nothing is ever rendered into it. *@
+  <div @ref="Element" class="@(Items.IsEmpty ? "rt-surface rt-empty" : "rt-surface")" data-rt-surface="@(Profile == RichTextSurfaceProfile.Inline ? "inline" : "prose")"
+       role="textbox" aria-multiline="true" aria-label="@Label"></div>
+  @if (Stalled)
+  {
+    <p class="rt-surface-stalled" role="status">@StalledMessage <button type="button" @onclick="TryAgainAsync">Try again now</button></p>
+  }
+  @if (HasRejectedEdit)
+  {
+    <p class="error rt-surface-error" role="alert">@WriteModeMessages.Unconvertible</p>
+  }
+}

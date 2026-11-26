@@ -1,0 +1,108 @@
+@page "/fixture/{Name}"
+@using SyntaxCircus.Blazor.RichContent.Editing
+@using SyntaxCircus.RichContent
+
+@* The page the browser tests drive: one editor over a named document, plus controls to observe what the host got. *@
+
+<PageTitle>Fixture: @Name</PageTitle>
+
+<main id="fixture" data-interactive="@(_interactive ? "true" : "false")" data-instance="@_instance">
+    @if (_document is null)
+    {
+        <p>Unknown fixture.</p>
+    }
+    else
+    {
+        <p>
+            <button type="button" id="save" @onclick="Save">Save</button>
+            <button type="button" id="replace-same" @onclick="ReplaceSame">Replace with an equal copy</button>
+            <button type="button" id="replace-other" @onclick="ReplaceOther">Replace with different content</button>
+            <button type="button" id="toggle-disabled" @onclick="() => _disabled = !(_disabled ?? Disabled)">Disable or enable</button>
+        </p>
+        <p>
+            <button type="button" id="mode-blocks" @onclick="() => _chosen = RichContentEditorMode.Blocks">Switch to blocks</button>
+            <button type="button" id="mode-write" @onclick="() => _chosen = RichContentEditorMode.Write">Switch to writing</button>
+            <button type="button" id="mode-blocks-later" @onclick="SwitchToBlocksLaterAsync">Switch to blocks shortly</button>
+        </p>
+        <ContentDocumentEditor Document="_document" DocumentChanged="OnDocumentChanged" ErrorsChanged="OnErrorsChanged"
+                               Mode="EditorMode" ModeChanged="chosen => _chosen = chosen" Disabled="_disabled ?? Disabled" Limits="Limits" />
+        <p>Changes: <span id="changes">@_changes</span></p>
+        <ul id="errors">
+            @foreach (var error in _errors)
+            {
+                <li>@error.Code</li>
+            }
+        </ul>
+        <pre id="saved" data-save="@_saves">@_saved</pre>
+    }
+</main>
+
+@code {
+    // New for every component instance, so a test can tell a reconnected circuit from a replaced one.
+    private readonly string _instance = Guid.NewGuid().ToString("n");
+
+    private ContentDocument? _document;
+    private IReadOnlyList<RichContentError> _errors = [];
+    private string _saved = "";
+    private int _saves;
+    private int _changes;
+    private bool _interactive;
+
+    [Parameter] public string Name { get; set; } = "";
+
+    /// <summary><c>blocks</c> (the default) or <c>write</c>.</summary>
+    [SupplyParameterFromQuery] public string? Mode { get; set; }
+
+    [SupplyParameterFromQuery] public bool Disabled { get; set; }
+
+    /// <summary>A raised or lowered <see cref="RichContentLimits.UrlCharacters"/>, as a host may set.</summary>
+    [SupplyParameterFromQuery] public int? UrlLimit { get; set; }
+
+    private RichContentLimits? Limits => UrlLimit is { } characters ? RichContentLimits.Default with { UrlCharacters = characters } : null;
+
+    private bool? _disabled;
+
+    // Chosen on the page, over the one in the address, so that a test can switch a live editor.
+    private RichContentEditorMode? _chosen;
+
+    private RichContentEditorMode EditorMode =>
+        _chosen ?? (Mode == "write" ? RichContentEditorMode.Write : RichContentEditorMode.Blocks);
+
+    // Late enough for a test to cut the connection first, so that the switch happens while it is down.
+    private async Task SwitchToBlocksLaterAsync()
+    {
+        await Task.Delay(TimeSpan.FromSeconds(2));
+        _chosen = RichContentEditorMode.Blocks;
+    }
+
+    protected override void OnInitialized() => _document = Fixtures.Get(Name);
+
+    protected override void OnAfterRender(bool firstRender)
+    {
+        if (firstRender)
+        {
+            _interactive = true;
+            StateHasChanged();
+        }
+    }
+
+    // Stores the document before anything is awaited, as @bind-Document does.
+    private void OnDocumentChanged(ContentDocument document)
+    {
+        _document = document;
+        _changes++;
+    }
+
+    private void OnErrorsChanged(IReadOnlyList<RichContentError> errors) => _errors = errors;
+
+    private void Save()
+    {
+        _saved = ContentDocumentSerializer.Serialize(_document!);
+        _saves++;
+    }
+
+    // Replacing is the host's own doing, so neither button counts as a change.
+    private void ReplaceSame() => _document = Fixtures.Copy(_document!);
+
+    private void ReplaceOther() => _document = Fixtures.Replaced(_document!);
+}

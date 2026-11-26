@@ -3,7 +3,81 @@
 All notable changes to this project are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## Unreleased
+## 0.2.0
+
+### Added
+
+- Write mode for `ContentDocumentEditor`: prose is edited as continuous formatted text (paragraphs, headings, lists,
+  quotes, bold, italic, inline code, links), with cards for code blocks, images, tables and the other block types, a
+  toolbar, keyboard shortcuts, plain-text paste and Insert. Content it cannot reproduce exactly is kept as it is and
+  shown as a "Preserved content" card. Only the top-level nodes the author changes are rebuilt.
+- `ContentDocumentEditor.Mode` (`RichContentEditorMode.Blocks`, the default, or `Write`), bindable through
+  `ModeChanged`, and `ShowModeSwitch` (default `true`).
+- `RichTextSurface` (with `RichTextSurfaceProfile`), the writing surface, public so that extension editors can try it.
+  That use is experimental: no browser test hosts it inside an extension editor in Write mode.
+- The error code `surface-unconvertible` in `ErrorsChanged`: something on screen is not in the document. Hosts should
+  block saving while it is there.
+- `RichTextEditorOperations.SetTableHeaderRow`.
+- CSS custom properties `--rt-border`, `--rt-muted`, `--rt-accent`, `--rt-error`, `--rt-surface`, `--rt-button-bg`,
+  `--rt-button-text` and `--rt-toolbar-top`.
+- JavaScript modules, shipped as static web assets and imported only for Write mode and `RichTextSurface`. No
+  third-party script. The viewer and Blocks mode use none.
+- Other public types in `Editing.Surfaces` and `Editing.Writing` are the editor's own components and their parts. They
+  are public because Razor components are, are not a supported API, and may change in any version.
+
+### Changed
+
+- The editor shows a `Write | Blocks` switch by default. Set `ShowModeSwitch="false"` to hide it. Otherwise the default
+  view is the block editor, as before.
+- New editor styling in both views. Colours follow the host's text colour, so dark pages are readable; before, the
+  "Insert block" link, error messages, hints and preserved-block notices used fixed colours. Buttons and fields are now
+  themed, including those inside a host's media picker and extension editors; the theme is in the CSS cascade layer
+  `rich-content-editor`, so the host's own unlayered rules win. The editor's root is now a flex column instead of a
+  grid.
+
+### Notes for hosts
+
+See the README's "Write mode" section before turning it on. In short:
+
+- A `DocumentChanged` handler must store the document before its first incomplete `await`. A handler that does not
+  store an edit is not detected: the screen keeps it.
+- Applying a link within about one network round trip of the last keystroke in the link box, and then saving at once,
+  can miss the link.
+- With a Content-Security-Policy, allow style attributes (`style-src-attr 'unsafe-inline'`, or `'unsafe-inline'` in
+  `style-src`).
+- Do not override fonts inside `[data-rt-surface]` with `!important`; keep `"rt-code"` first in a code font you set
+  there, and give code there no box, colour or size, global `code` rules of your page included.
+- The editor sets `defaultParagraphSeparator`, which applies to the whole document.
+- If you raise `UrlCharacters` above 4000: on a stored link longer than 4000 characters, the Write mode link box
+  applies no address, and can only remove the link. Edit such a link in Blocks mode.
+- Blocks mode is unchanged apart from styling: with large fields it still needs a higher
+  `HubOptions.MaximumReceiveMessageSize`. Write mode does not.
+
+### Known limitations
+
+- Adding, moving and removing cards and blocks cannot be undone. Content that is redrawn may lose its undo history.
+- In Firefox, earlier undo history is lost after the editor has been `Disabled` and enabled again.
+- The toolbar does not use a roving tab index. After answering "No" to "Remove?", focus is not returned to the button.
+- Table rows and columns are added and removed at the end only, and rows cannot be moved in Write mode.
+- A non-breaking space typed or pasted into a surface becomes an ordinary space; a stored one that is deleted and
+  brought back is kept only if the text around it is as it was.
+- With a monospace editor font, inline code looks like the text around it while editing.
+- Formatting or a link left wrapped around a whole block is not kept.
+- A rearrangement freezes text areas and text, URL, search, number and email inputs only. Other controls, including
+  those in extension editors, stay writable, and a change made in one then can be lost.
+- While part of the editor is briefly frozen, Ctrl/Cmd+Z and Y in the editor or with nothing focused, and Backspace
+  with nothing focused, are cancelled.
+
+### Not verified
+
+- A real input method (IME). Only simulated composition is tested.
+- Retail Firefox and real Safari. Tests use Playwright's Chromium, Firefox and WebKit builds; in WebKit the tests
+  that cut, copy and paste with the real clipboard fail on the Windows machine used, so that is not verified there.
+- Screen readers. While editing, inline code has no code semantics for them.
+- Undo or redo chosen from the browser's menu while the editor is briefly frozen.
+- Mobile browsers and touch keyboards, and Blazor WebAssembly or Auto rendering.
+
+## 0.1.0 - 2026-11-20
 
 ### Added
 

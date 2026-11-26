@@ -14,8 +14,11 @@ Block-based rich content for Blazor apps, shipped as two NuGet packages that sha
   editing (`ContentDocumentEditor`) that content. It references `SyntaxCircus.RichContent`.
 
 Use only the first package if you just need to store, read or validate documents (for example in an API or a worker).
-Add the second in the Blazor app that renders or edits them. There is no JavaScript interop, and component CSS is
-scoped (`.razor.css`), so nothing leaks into your global styles.
+Add the second in the Blazor app that renders or edits them. Component CSS is scoped (`.razor.css`), so it does not
+restyle the rest of your app; it reaches your app through its scoped CSS bundle (`{AssemblyName}.styles.css`), which
+your page must link. The viewer, and the editor's block view, use no JavaScript of this package. The editor's
+[Write mode](#write-mode) loads JavaScript modules that ship in the package as static web assets: no third-party
+script, npm or bundler step.
 
 ## Install
 
@@ -81,7 +84,8 @@ Then render and edit:
 - `ContentDocumentView` server-renders a stored document. Blocks that fail validation are skipped (and logged as a warning with block ids and error codes only); the other blocks still render, and document-level errors do not suppress any block.
 - `ContentDocumentEditor` is a controlled component: every edit raises `DocumentChanged` and you feed the new
   document back in (`@bind-Document` does this). `ErrorsChanged` reports the current validation errors so you can
-  block saving. Both accept an optional `Limits` parameter; the editor also takes `Label` and `Disabled`.
+  block saving. Both accept an optional `Limits` parameter; the editor also takes `Label`, `Disabled`, `Mode`,
+  `ModeChanged` and `ShowModeSwitch` (see [Write mode](#write-mode)).
 
 ### Media: `IRichContentMediaResolver` (required)
 
@@ -114,6 +118,264 @@ with `editor.MediaPicker = typeof(MyMediaPicker)`. Without a picker, adding imag
 ```
 
 `MediaPickerBase` provides `Value`, `ValueChanged` (a `MediaRef?`; `null` clears) and `Disabled`.
+
+## Write mode
+
+The editor has two views of the same document. **Blocks** (the default) has one labelled field for every node, for
+structural work. **Write** shows prose as continuous formatted text: paragraphs, headings (levels 2 to 4), bulleted
+and numbered lists, quotes, bold, italic, inline code and links. Authors switch with the `Write | Blocks` buttons.
+
+```razor
+<ContentDocumentEditor @bind-Document="_document" @bind-Mode="_mode" ErrorsChanged="OnErrors" />
+
+@code {
+    private RichContentEditorMode _mode = RichContentEditorMode.Write;
+}
+```
+
+Write mode needs interactive rendering. Interactive server rendering is what is supported and tested; WebAssembly and
+Auto are not tested.
+
+In Write mode, consecutive prose is a writing surface. Code blocks, images and tables are cards between surfaces, and
+so are the other block types, which use the same editors as in Blocks mode (a callout's text is written like any other
+text). Anything a surface cannot reproduce exactly, such as a node with unknown properties or a shape the surface does
+not support (including content nested more than 8 levels deep), is shown as a "Preserved content" card: it can be
+moved or removed, is edited in Blocks mode only, and is never converted. Opening a document, moving the cursor and
+switching modes raise no `DocumentChanged`. Only the top-level nodes the author changes are rebuilt, and a rebuilt
+node can be normalised (adjacent text runs merge, empty formatting is dropped).
+
+Cards are moved and removed with their buttons only; Backspace never deletes one. There is somewhere to type before
+and after every card (an empty one is outlined, and is not stored until something is typed). Removing a card, a
+table's last row or column, or a block other than a text block asks first if it holds something. A text block's
+**Remove** in its header does not ask, unless it shows text that could not be saved. Table rows and columns are added
+and removed at the end only.
+
+**Insert** puts a code block, image or table after the paragraph (or list or quote) with the cursor. A gallery,
+callout, call to action or extension block splits the text block there. Inside a callout only code blocks, images and
+tables are offered, and in a table cell Insert is disabled.
+
+### `DocumentChanged`: store the document before awaiting
+
+Every edit the author has made reaches your `DocumentChanged` handler before a click made afterwards, such as Save, is
+handled. This holds **only if the handler stores the document before its first incomplete `await`**, as
+`@bind-Document` does:
+
+```csharp
+private async Task OnDocumentChanged(ContentDocument document)
+{
+    _document = document;          // first
+    await _drafts.SaveAsync(...);  // then anything slow
+}
+```
+
+One exception, with the link box: pressing **Apply link** or Enter within about one network round trip of your last
+keystroke in it means the server has to check the address before the link is made. A save clicked straight after can
+miss that link. The link box stays open until the server has handled the click, so this is visible.
+
+In Write mode the editor builds each edit on the one before, without waiting for you to pass the document back. If
+your handler does **not** store a document (you reject the edit, or an `await` before storing fails), the editor is not
+told: the screen keeps showing the edit, and later edits are built on it, so it can come back with them. **To revert,
+pass a fresh copy of your previous document**, for example by serializing and deserializing it:
+
+```csharp
+_document = ContentDocumentSerializer.Deserialize(ContentDocumentSerializer.Serialize(previous)).Document!;
+```
+
+Passing the previous instance itself back does nothing: the editor still has it from you, and sees no change. Nor does
+a `with` copy that shares its block contents redraw the text. The redraw that reverts **discards unsent text in that
+place** too.
+
+When you replace `Document` (a reload, a conflict resolution), places whose content is the same by value are left
+alone, so the cursor, undo history and unsent text survive. A place whose content differs is redrawn and **your
+document wins: unsent text there, and text there that could not be saved, is discarded**.
+
+### Errors that must block saving
+
+`ErrorsChanged` works as in Blocks mode. In addition, if what a surface, table cell or code card shows cannot be taken
+into the document, the editor keeps it on screen and reports an error with the code `surface-unconvertible`.
+**Block saving while `ErrorsChanged` contains `surface-unconvertible`: your `Document` is behind the screen.** This
+happens, for example, to a paste far beyond the size limits (the largest single edit accepted is the larger of 2 MiB
+and 4 × `TextBytes` + 256 × `Nodes`, and a surface can hold at most the larger of 4096 and `Nodes` top-level nodes),
+or to content that would be nested more than 8 levels deep, even if your `Limits` allow more. While it lasts, the editor refuses a mode switch, and rearrangements that would redraw that text.
+
+### Switching views
+
+- `Mode` is `RichContentEditorMode.Blocks` (default) or `Write`. `ShowModeSwitch` (default `true`) shows the buttons;
+  they stay enabled while the editor is `Disabled`.
+- A switch takes at least a round trip. The editor is read-only until the browser has confirmed that everything typed
+  has been sent, so a switch can wait as long as the connection does.
+- `ModeChanged` is raised after the author's switch and after the fallback below. It is not raised for a switch you
+  made by changing `Mode` that succeeds. It **is** raised, with the view still shown, when your change is refused
+  (something could not be saved) or the author cancels it before it happens. An author's own refused switch shows a
+  notice and raises nothing.
+- If you set `Mode` one way (without `@bind-Mode`), handle `ModeChanged` and update your value. The editor follows
+  `Mode` when its value changes, so a stale value means setting it again does nothing.
+- If Write mode's script cannot be loaded or fails before it has drawn, the editor shows a notice, switches to Blocks
+  and raises `ModeChanged(Blocks)`; **if you store the preference, you will store that**. Choosing Write again tries
+  again. With `ShowModeSwitch="false"`, only your code (setting `Mode` back to `Write`) or a page reload brings Write
+  back. A browser may remember a failed module import, so a reload may be needed; this has not been tested. A lost
+  connection or a slow one does not cause the fallback.
+- A Write editor's surfaces and code cards cannot be typed into until the toolbar's script is ready, at least one
+  round trip after the page becomes interactive. While a script or a redraw is late, a "Trying again" notice is
+  shown. If a surface or code card that has already drawn goes on failing because its script throws, automatic retries
+  stop after a few attempts; the notice then says so, and **Try again now** or new content from your code tries again.
+- Switching to Blocks does not change the message size limit of Blocks mode (below): a very large paragraph written in
+  Write mode can drop the connection if it is then edited in Blocks mode.
+
+### Message size (`HubOptions`)
+
+Write mode works with SignalR's default 32 KB incoming message limit. Surfaces, table cells and code cards send their
+edits in small pieces. The other fields on screen in Write mode (alt text, captions, titles, call to action fields and
+the link address) send their whole value and are capped at 4,000 characters (`maxlength`). The content rules allow
+less in all of them except URLs, which has two consequences if you raise `UrlCharacters` above 4000:
+
+- Write mode cannot type or paste a longer address.
+- On a longer stored link, the link box says that the address is too long to edit there and shows only its start.
+  **It then applies no address at all**, neither that start nor one typed over it, since it cannot tell the two apart.
+  The link is kept as it is. Edit it in Blocks mode, or use **Remove link** (applying an empty address does the same)
+  and then link the text again.
+
+A stored value that is already longer than a field's cap is shown whole and can be shortened but not extended. Each
+keystroke still sends all of it, so one near 32 KB or more exceeds the default limit.
+
+**Blocks mode is different:** its fields send their whole value on every keystroke, with no cap. A field near or above
+32 KB (a very large paste, or a code block near its limit) can exceed the default limit and drop the circuit. If you
+use Blocks mode with large fields, raise the limit:
+
+```csharp
+builder.Services.AddRazorComponents().AddInteractiveServerComponents()
+    .AddHubOptions(options => options.MaximumReceiveMessageSize = 256 * 1024);
+```
+
+What your media picker and extension editors send is up to them.
+
+### Connection
+
+If the same circuit reconnects, Write mode keeps the text on screen and delivers what was not acknowledged. If the
+circuit is lost (a reload, or a paused circuit resumed as new components), unsent and unsaved text is lost, as in
+Blocks mode.
+
+### Extension editors
+
+An extension block's editor receives `Disabled`; **pass it on to any script-edited surface your editor contains**
+(such as a `RichTextSurface`). The editor does not wait, at a mode switch, for a surface that was not given
+`Disabled`, and such a surface stays writable while the editor is `Disabled`. A `RichTextSurface` inside an extension
+editor is experimental: no browser test hosts one there in Write mode.
+
+### Keyboard
+
+| Keys | Action |
+| --- | --- |
+| Ctrl/Cmd+B, I | Bold, italic |
+| Ctrl/Cmd+E | Inline code |
+| Ctrl/Cmd+K | Link box: Enter applies, Escape cancels (neither does while the browser reports that an input method is composing); applying an empty address removes the link. With nothing selected, the address becomes the link text |
+| Enter | New paragraph or list item; on an empty list item or quote line, leaves it. Does nothing in a table cell |
+| Shift+Enter | Same as Enter (the model has no line break) |
+| Tab, Shift+Tab | In a list, nest and un-nest the item. When nothing can move, and outside lists, focus moves as usual |
+| Right arrow | At the end of inline code that ends its line, leaves the code |
+| Alt+F10 | Go to the toolbar. Left and Right move along it, Escape returns to the text. On the style list, Alt+Down opens it (in some browsers Up and Down apply a style at once and return to the text) |
+| In a code card | Tab inserts four spaces; Escape then Tab leaves; Shift+Tab goes back |
+
+Ctrl/Cmd+U does nothing: the model has no underline. Every toolbar button is also a normal Tab stop (the toolbar does
+not use a roving tab index).
+
+### Paste, drag and drop
+
+Pasting into a surface takes **plain text only**; pasted HTML is never inserted. Blank lines separate paragraphs and
+single line breaks become spaces (in a table cell, everything becomes one line). A code card is an ordinary text area.
+Dropping onto a surface is blocked, and text in a surface cannot be dragged.
+
+### Undo
+
+The browser's undo and redo cover typing and toolbar formatting in surfaces and code cards (a browser may keep one
+history for the whole page). Adding, moving and removing cards and blocks **cannot** be undone. Earlier typing in
+surfaces that a rearrangement leaves in place can still be undone, and so can earlier typing after a mode switch that
+was refused after it started. Content that is
+redrawn (your replacement of it, or a surface split by Insert) may lose its history. **In Firefox, after the editor
+has been `Disabled` and enabled again, earlier undo history is lost.**
+
+### Content-Security-Policy
+
+Write mode needs no inline script, `eval` or other origin for its scripts: `script-src 'self'` is enough, plus what
+Blazor itself needs (such as `connect-src` for the WebSocket) and `img-src` for your media. **For styles, allow style
+attributes**: either `style-src 'self' 'unsafe-inline'` (the policy the browser tests run under) or, more narrowly,
+`style-src 'self'; style-src-attr 'unsafe-inline'`. The editing commands built into Chromium and WebKit write style
+attributes in some operations, such as joining lines, and without this the browser blocks them and reports
+`style-src-attr` violations. The narrower form was checked by hand for a short sequence of edits only.
+
+### Styling
+
+Colours come from these CSS custom properties. Set them on the editor or any element around it. The defaults are mixed
+from your page's text colour (`currentColor`), so light and dark pages both work without setting any of them.
+
+| Property | Used for | Default |
+| --- | --- | --- |
+| `--rt-border` | Borders and dividers | 28% of the text colour |
+| `--rt-muted` | Hints and status notices | 80% of the text colour |
+| `--rt-accent` | Links, "Insert block", focus and pressed buttons | the text colour mixed with blue |
+| `--rt-error` | Error messages | the text colour mixed with red |
+| `--rt-surface` | Background of the sticky toolbar | transparent, with what scrolls under it blurred |
+| `--rt-button-bg` | Button background | 8% of the text colour |
+| `--rt-button-text` | Button text | the text colour |
+
+The Write mode toolbar stays at the top of the window while the document scrolls. If your page has a fixed header, set
+`--rt-toolbar-top` to its height. Set `--rt-surface` to your page's background for an opaque toolbar. The theme of
+buttons and fields (including those in your media picker and extension editors) is in the CSS cascade layer
+`rich-content-editor`, so your own unlayered rules for them win. Sizing rules, such as button minimum height and full
+width fields, are not layered.
+
+**Do not override with `!important`, inside `[data-rt-surface]`, `font-weight` or `font-style`, or the `font-family`
+of `code` or `font[face="rt-plain"]` elements.** The browser's formatting commands decide what is bold, italic or code
+from how text looks, so the editor pins these (headings, for instance, show at normal weight while edited). While
+editing, inline code is shown as `font[face="rt-code"]`. If you change the code font there (for `code` and
+`font[face="rt-code"]`), **keep `"rt-code"` first in the font family list**, as in
+`font-family: "rt-code", ui-monospace, monospace`; the editor recognises code by it. While editing, the editor marks
+inline code by its font alone. **Do not add rules inside `[data-rt-surface]` that give `code` or
+`font[face="rt-code"]` a box (a background, border, outline, shadow or padding) or change its colour or size:** they
+also reach plain text that Firefox keeps nested inside a code element, which would then look like code although it is
+stored as plain text. **This includes your page's global rules that reach into a surface**, such as a CSS framework's
+`code { background: ...; color: ...; padding: ... }`. If you have one, scope it away from surfaces or undo it inside
+`[data-rt-surface]`. Text taken out of code while
+editing can be left inside the code element (Firefox does this). The editor then shows it in the surface's own font,
+as it was when the surface last got the focus. Until the text is redrawn, a separate font that you set only for
+headings, links or quotes does not apply to it.
+
+### Other effects on the page
+
+- While a surface has the focus the editor sets the browser's `defaultParagraphSeparator` to `p`. This setting belongs
+  to the whole document, so it also affects other `contenteditable` elements on the page.
+
+### Components and API
+
+The supported API for hosts is `ContentDocumentEditor` (with `Mode`, `ModeChanged` and `ShowModeSwitch`) and
+`RichContentEditorMode`. `RichTextSurface` (`Nodes`, `NodesChanged`, `Disabled`, `FocusOnStart`, `Label`, `Profile`
+with `RichTextSurfaceProfile`; its nodes must be ones a surface can edit, and `NodesChanged` handlers have the same
+store-before-await rule) is public so that extension editors can try a writing surface of their own. **That use is
+experimental:** no browser test hosts it inside an extension editor in Write mode. Other public types in the
+`Editing.Surfaces` and `Editing.Writing` namespaces (cards, the toolbar, `WritingBlock`, `InsertChoice`,
+`ScriptEditorBase`, `SurfaceSelection`) are the editor's own parts. They are public because Razor components are, and
+may change in any version. Their `[JSInvokable]` methods are for the package's scripts only.
+
+### Known limitations
+
+- A non-breaking space you type or paste into a surface becomes an ordinary space. Stored ones are kept, but one that is
+  deleted and brought back is recognised only if the text around it is also as it was.
+- Inline code is marked while editing by its font alone, so **if your editor's own font is monospace, inline code looks
+  like the text around it.** The toolbar's Inline code button still shows it at the cursor.
+- If an editing operation leaves formatting or a link wrapped around a whole paragraph or other block, the wrapper is
+  not kept: the text is stored without it.
+- During a rearrangement the editor makes text areas and text, URL, search, number and email inputs read-only,
+  including those in extension editors. **Other controls are not frozen** (checkboxes, radio buttons, selects, other
+  input types and custom editors of your own), so what is changed in one then can be lost.
+- While part of the editor is briefly frozen, Ctrl/Cmd+Z and Ctrl/Cmd+Y pressed in the editor or with nothing focused,
+  and Backspace with nothing focused, are cancelled.
+
+### Browsers, and what has not been verified
+
+The browser tests run on Playwright's Chromium, Firefox and WebKit builds. **Not verified:** a real input method (IME;
+only simulated composition is tested), retail Firefox, real Safari (and cut, copy and paste with the real clipboard in
+WebKit), screen readers, mobile and touch keyboards, and undo or redo chosen from the browser's menu while the editor
+is briefly frozen. While editing, **inline code has no code semantics for screen readers**.
 
 ## Extension blocks
 
@@ -252,10 +514,32 @@ parameter of the view and editor, or to `Validate`). The defaults are blog-sized
 var limits = RichContentLimits.Default with { Blocks = 50, TextBytes = 64 * 1024 };
 ```
 
-## Sample
+## Demo and sample
 
-`samples/RichContent.Sample` in the repository is a runnable Blazor Server app with an editor, a live preview, a media
-picker and a `project-card` extension block. It is not packed.
+Neither app is packed.
+
+**`samples/RichContent.Demo`** is for trying the editor by hand or through browser automation. From the repository
+root:
+
+```
+dotnet run --project samples/RichContent.Demo
+```
+
+Then open `http://localhost:5199`. One page has the editor, a live preview, the validation errors and the saved JSON.
+You can load several sample documents, disable the editor, lower the content limits and switch between a light and a
+dark theme. **Add too much text** puts more into a writing area than the editor can send, so that you can try the
+unsaved-text warning. Nothing is stored: reloading the page starts again.
+
+**`samples/RichContent.Sample`** is the app the browser tests drive. It has an editor with a live preview, a media
+picker, a `project-card` extension block and the test pages.
+
+## Maintaining
+
+CI runs the browser tests on Chromium only, and a merge to `main` publishes. **Before releasing a change to styles
+(`.css` files, or the styles the surface script adds), run the browser tests on WebKit too:** CSS that is harmless
+elsewhere can make large edits very slow there. Set `RICHCONTENT_BROWSER=webkit` (or `firefox`) and run
+`dotnet test --project tests/SyntaxCircus.Blazor.RichContent.BrowserTests -c Release`, after installing that browser
+with the `playwright.ps1` script in the test project's build output.
 
 ## License
 

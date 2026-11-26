@@ -1,6 +1,32 @@
+@using SyntaxCircus.Blazor.RichContent.Editing.Surfaces
+@using SyntaxCircus.Blazor.RichContent.Editing.Writing
 @if (Document is not null)
 {
-<div class="doc-editor" role="group" aria-label="@Label">
+<div class="doc-editor" role="group" aria-label="@Label" data-rt-editor="@Writing">
+<CascadingValue Value="_session" IsFixed="true">
+    @if (ShowModeSwitch)
+    {
+        <div class="rt-mode-switch" role="group" aria-label="Editing mode" data-rt-mode-switch>
+            @ModeButton(RichContentEditorMode.Write, "Write")
+            @ModeButton(RichContentEditorMode.Blocks, "Blocks")
+        </div>
+    }
+    @if (_loadFailed && !Writing)
+    {
+        <p class="error rt-load-failed" role="alert">@WriteModeMessages.LoadFailed</p>
+    }
+    @if (_switchRefused)
+    {
+        <p class="error rt-switch-refused" role="alert">@WriteModeMessages.SwitchRefused</p>
+    }
+    @if (_blockRefused)
+    {
+        <p class="error rt-refused" role="alert">@WriteModeMessages.RearrangeRefused</p>
+    }
+    @if (Writing)
+    {
+        <WritingToolbar Disabled="ReadOnly" />
+    }
     @if (!HasMediaPicker)
     {
         <p class="hint">No media picker is configured, so images and galleries cannot be added.</p>
@@ -9,34 +35,50 @@
     {
         <p class="error" role="alert">@error.Message</p>
     }
-    @Menu(0, true, inserted => Update(ContentDocumentOperations.Add(Document, 0, inserted)))
-    @for (var i = 0; i < Blocks.Length; i++)
+    @Menu(0, true, inserted => AddBlock(0, inserted))
+    @foreach (var shown in ShownBlocks())
     {
-        var index = i;
-        var block = Blocks[index];
-        <section class="block" @key="KeyFor(block, index)" data-block-id="@block.Id" data-block-kind="@KindOf(block)">
-            <header>
-                <strong>@TitleOf(block)</strong>
-                <div class="actions">
-                    <button type="button" disabled="@(Disabled || index == 0)" @onclick="() => Update(ContentDocumentOperations.Move(Document, index, -1))">Move up</button>
-                    <button type="button" disabled="@(Disabled || index == Blocks.Length - 1)" @onclick="() => Update(ContentDocumentOperations.Move(Document, index, 1))">Move down</button>
-                    <button type="button" disabled="@Disabled" @onclick="() => Update(ContentDocumentOperations.Remove(Document, index))">Remove</button>
-                </div>
-            </header>
+        var index = shown.Index;
+        var block = shown.Block;
+        @* An empty place is drawn as the block it will become, so that typing in it keeps its components. *@
+        <section class="block" @key="shown.Key" data-block-id="@(shown.IsPlace ? null : block.Id)" data-block-kind="@(shown.IsPlace ? null : KindOf(block))" data-rt-place="@shown.IsPlace">
+        <CascadingValue Name="@ScriptEditorBase.BlockIdCascade" Value="@block.Id">
+            @if (!shown.IsPlace)
+            {
+                <header>
+                    <strong>@TitleOf(block)</strong>
+                    <div class="actions">
+                        <button type="button" data-rt-rearrange disabled="@(ReadOnly || index == 0)" @onclick="() => MoveBlock(index, block, -1)">Move up</button>
+                        <button type="button" data-rt-rearrange disabled="@(ReadOnly || index == Blocks.Length - 1)" @onclick="() => MoveBlock(index, block, 1)">Move down</button>
+                        @if (Writing && (block is not RichTextBlock || _session.HasRejectedInBlock(block.Id)))
+                        {
+                            <RemoveButton Label="Remove" Text="Remove" Disabled="ReadOnly" NeedsConfirmation="() => HoldsSomething(index, block)" Confirmed="() => RemoveBlock(index, block)" />
+                        }
+                        else
+                        {
+                            <button type="button" data-rt-rearrange disabled="@ReadOnly" @onclick="() => RemoveBlock(index, block)">Remove</button>
+                        }
+                    </div>
+                </header>
+            }
             @switch (block)
             {
+                case RichTextBlock rich when Writing:
+                    <WritingBlock Nodes="rich.Nodes" NodesChanged="nodes => WriteNodes(index, rich.Id, nodes)" Disabled="ReadOnly" Label="Text block" MaxDepth="MaxDepth"
+                                  InsertChoices="TextInsertChoices" InsertBlockAt="at => InsertBlockAt(index, rich.Id, at.NodeIndex, at.Block)" />
+                    break;
                 case RichTextBlock rich:
-                    <RichTextEditor Nodes="rich.Nodes" NodesChanged="nodes => Replace(index, rich with { Nodes = nodes })" Disabled="Disabled" Label="Text block" MaxDepth="MaxDepth"
-                                    BetweenNodes="nodeIndex => Menu(nodeIndex, false, inserted => Update(ContentDocumentOperations.SplitRichText(Document, index, nodeIndex, inserted)))" />
+                    <RichTextEditor Nodes="rich.Nodes" NodesChanged="nodes => Replace(index, rich with { Nodes = nodes })" Disabled="ReadOnly" Label="Text block" MaxDepth="MaxDepth"
+                                    BetweenNodes="nodeIndex => Menu(nodeIndex, false, inserted => Update(ContentDocumentOperations.SplitRichText(Latest, index, nodeIndex, inserted)))" />
                     break;
                 case GalleryBlock gallery:
-                    <GalleryBlockEditor Block="gallery" BlockChanged="updated => Replace(index, updated)" Disabled="Disabled" />
+                    <GalleryBlockEditor Block="gallery" BlockChanged="updated => Replace(index, updated)" Disabled="ReadOnly" />
                     break;
                 case CalloutBlock callout:
-                    <CalloutBlockEditor Block="callout" BlockChanged="updated => Replace(index, updated)" Disabled="Disabled" MaxDepth="MaxDepth" />
+                    <CalloutBlockEditor Block="callout" BlockChanged="updated => Replace(index, updated)" Disabled="ReadOnly" MaxDepth="MaxDepth" />
                     break;
                 case CtaBlock cta:
-                    <CtaBlockEditor Block="cta" BlockChanged="updated => Replace(index, updated)" Disabled="Disabled" />
+                    <CtaBlockEditor Block="cta" BlockChanged="updated => Replace(index, updated)" Disabled="ReadOnly" />
                     break;
                 case ExtensionBlock extension when Registry.TryGet(extension.Type, out var registration) && registration.Editor is { } editor:
                     <ErrorBoundary>
@@ -54,7 +96,7 @@
                     <p class="preserved">This is an unsupported block (kept as-is). It is preserved when you save.</p>
                     break;
             }
-            @if (ErrorsFor(index) is { Count: > 0 } errors)
+            @if (ErrorsFor(index, block) is { Count: > 0 } errors)
             {
                 <ul class="errors" role="alert">
                     @foreach (var error in errors)
@@ -63,13 +105,25 @@
                     }
                 </ul>
             }
+        </CascadingValue>
         </section>
-        @Menu(index + 1, true, inserted => Update(ContentDocumentOperations.Add(Document, index + 1, inserted)))
+        @if (!shown.IsPlace)
+        {
+            @Menu(index + 1, true, inserted => AddBlock(index + 1, inserted))
+        }
     }
+    @if (_pending is not null)
+    {
+        @Barrier(_switches)
+    }
+</CascadingValue>
 </div>
 }
 
 @code {
+    private RenderFragment ModeButton(RichContentEditorMode mode, string label) =>
+        @<button type="button" aria-pressed="@(_shown == mode ? "true" : "false")" data-rt-rearrange="@(Writing && _shown != mode && _session.Rejected.Count == 0)" @onclick="() => ChooseMode(mode)">@label</button>;
+
     private RenderFragment Menu(int position, bool includeText, Func<ContentBlock, Task> insert) =>
         @<details class="insert-menu" data-position="@position">
             <summary>Insert block</summary>
@@ -77,7 +131,7 @@
                 @foreach (var choice in Choices.Where(c => includeText || !c.IsText))
                 {
                     var blocked = choice.NeedsMedia && !HasMediaPicker;
-                    <button type="button" disabled="@(Disabled || blocked)" title="@(blocked ? "No media picker is configured." : null)" @onclick="() => insert(choice.Create())">@choice.Label</button>
+                    <button type="button" data-rt-rearrange disabled="@(ReadOnly || blocked)" title="@(blocked ? "No media picker is configured." : null)" @onclick="() => insert(choice.Create())">@choice.Label</button>
                 }
             </div>
         </details>;

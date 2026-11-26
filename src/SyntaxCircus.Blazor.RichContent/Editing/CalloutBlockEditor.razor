@@ -1,17 +1,33 @@
+@using SyntaxCircus.Blazor.RichContent.Editing.Writing
 <div class="fields">
     <label>Tone
-        <select value="@Block.Tone.ToString()" @onchange="ToneChanged" disabled="@Disabled">
+        <select value="@Current.Tone.ToString()" @onchange="ToneChanged" disabled="@Disabled">
             @foreach (var tone in Enum.GetValues<CalloutTone>())
             {
                 <option value="@tone.ToString()">@tone</option>
             }
         </select>
     </label>
-    <label>Title<input type="text" value="@Block.Title" @oninput="TitleChanged" disabled="@Disabled" /></label>
-    <RichTextEditor Nodes="Block.Nodes" NodesChanged="NodesChanged" Disabled="Disabled" Label="Callout text" MaxDepth="MaxDepth" />
+    <label>Title<input type="text" value="@Current.Title" maxlength="@(Writing ? WritingSession.FieldCharacters : null)" @oninput="TitleChanged" disabled="@Disabled" /></label>
+    @if (Writing)
+    {
+        <WritingBlock Nodes="Current.Nodes" NodesChanged="NodesChanged" Disabled="Disabled" Label="Callout text" MaxDepth="MaxDepth"
+                      InsertChoices="InsertChoice.ForNodes(MaxDepth)" />
+    }
+    else
+    {
+        <RichTextEditor Nodes="Block.Nodes" NodesChanged="NodesChanged" Disabled="Disabled" Label="Callout text" MaxDepth="MaxDepth" />
+    }
 </div>
 
 @code {
+    // In Write mode, edits can arrive before the new block has been passed back down, so each one must build on the
+    // one before.
+    private CalloutBlock? _parameter;
+    private CalloutBlock? _latest;
+
+    [CascadingParameter] private WritingSession? Session { get; set; }
+
     [Parameter, EditorRequired] public CalloutBlock Block { get; set; } = default!;
 
     [Parameter] public EventCallback<CalloutBlock> BlockChanged { get; set; }
@@ -20,12 +36,35 @@
 
     [Parameter] public int MaxDepth { get; set; } = RichContentLimits.Default.Depth;
 
+    private bool Writing => Session?.Writing == true;
+
+    private CalloutBlock Current => Writing && _latest is not null ? _latest : Block;
+
+    protected override void OnParametersSet()
+    {
+        // In the block view the parameter is the truth: an edit the host refused must not come back in Write mode.
+        if (!ReferenceEquals(Block, _parameter) || Session?.Writing != true)
+        {
+            _parameter = _latest = Block;
+        }
+    }
+
+    private Task Update(CalloutBlock block)
+    {
+        if (Session?.Writing == true)
+        {
+            _latest = block;
+        }
+
+        return BlockChanged.InvokeAsync(block);
+    }
+
     private Task ToneChanged(ChangeEventArgs e) =>
-        Enum.TryParse<CalloutTone>(e.Value?.ToString(), out var tone) ? BlockChanged.InvokeAsync(Block with { Tone = tone }) : Task.CompletedTask;
+        Enum.TryParse<CalloutTone>(e.Value?.ToString(), out var tone) ? Update(Current with { Tone = tone }) : Task.CompletedTask;
 
     private Task TitleChanged(ChangeEventArgs e) =>
-        BlockChanged.InvokeAsync(Block with { Title = string.IsNullOrEmpty(e.Value?.ToString()) ? null : e.Value!.ToString() });
+        Update(Current with { Title = string.IsNullOrEmpty(e.Value?.ToString()) ? null : e.Value!.ToString() });
 
     private Task NodesChanged(System.Collections.Immutable.ImmutableArray<RichTextNode> nodes) =>
-        BlockChanged.InvokeAsync(Block with { Nodes = nodes });
+        Update(Current with { Nodes = nodes });
 }

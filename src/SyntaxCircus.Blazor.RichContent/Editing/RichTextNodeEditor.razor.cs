@@ -10,9 +10,11 @@ public partial class RichTextNodeEditor
     private static readonly string[] LanguageOptions =
         ["csharp", "javascript", "typescript", "html", "xml", "css", "sql", "powershell", "python", "java", "cpp", "fsharp", "php"];
 
+    private IEnumerable<string> LanguageChoices => LanguageChoicesFor(Node.Language);
+
     // Aliases (cs, js, ...) are accepted by the highlighter but listed once, under their canonical name.
-    private IEnumerable<string> LanguageChoices =>
-        string.IsNullOrEmpty(Node.Language) || LanguageOptions.Contains(Node.Language) ? LanguageOptions : [.. LanguageOptions, Node.Language];
+    internal static IEnumerable<string> LanguageChoicesFor(string? language) =>
+        string.IsNullOrEmpty(language) || LanguageOptions.Contains(language) ? LanguageOptions : [.. LanguageOptions, language];
 
     [Parameter, EditorRequired] public RichTextNode Node { get; set; } = default!;
 
