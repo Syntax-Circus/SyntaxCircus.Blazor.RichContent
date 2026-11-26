@@ -22,6 +22,13 @@ public partial class ContentDocumentEditor
 
     private readonly WritingSession _session = new();
 
+    private sealed record ShownBlock(ContentBlock Block, int Index, object Key, bool IsPlace);
+
+    // Somewhere to type where no rich text block adjoins, between the blocks with these ids.
+    private sealed record EmptyPlace(string Id, string? PreviousId, string? NextId);
+
+    private List<EmptyPlace> _places = [];
+
     [Inject] private ContentBlockRegistry Registry { get; set; } = default!;
 
     [Inject] private RichContentEditorOptions Options { get; set; } = default!;
@@ -80,6 +87,7 @@ public partial class ContentDocumentEditor
     protected override async Task OnParametersSetAsync()
     {
         _session.Limits = Limits ?? RichContentLimits.Default;
+        _session.Writing = Mode == RichContentEditorMode.Write;
 
         if (!ReferenceEquals(Document, _parameter))
         {
@@ -116,22 +124,135 @@ public partial class ContentDocumentEditor
         return DocumentChanged.InvokeAsync(document);
     }
 
-    private Task Replace(int index, ContentBlock block) => Update(ContentDocumentOperations.Replace(Latest, index, block));
-
-    // An edit from a writing surface. Nothing here may await first: see RichTextSurface.ReceiveEdit.
-    private Task WriteNodes(int index, string id, ImmutableArray<RichTextNode> nodes)
+    // Where the block that was drawn at an index is now, or -1 if it has gone. In Write mode, blocks can have moved
+    // since they were drawn: an edit or a click then must not reach whatever is at the old index.
+    private int IndexOfDrawn(int index, Type type, string id)
     {
-        var blocks = Latest.Blocks;
-        bool IsTarget(ContentBlock block) => block is RichTextBlock && string.Equals(block.Id, id, StringComparison.Ordinal);
-        if (index >= blocks.Length || !IsTarget(blocks[index]))
+        if (Mode != RichContentEditorMode.Write)
         {
-            // It has moved, or has been removed.
-            index = blocks.ToList().FindIndex(IsTarget);
+            return index;
         }
 
-        return index < 0
+        var blocks = Latest.Blocks.IsDefault ? [] : Latest.Blocks;
+        bool IsTarget(ContentBlock block) => block.GetType() == type && string.Equals(block.Id, id, StringComparison.Ordinal);
+        return index >= 0 && index < blocks.Length && IsTarget(blocks[index]) ? index : blocks.ToList().FindIndex(IsTarget);
+    }
+
+    private int IndexOfDrawn(int index, ContentBlock drawn) => IndexOfDrawn(index, drawn.GetType(), drawn.Id);
+
+    // Nothing here may await first: the edits of a callout's surfaces come this way.
+    private Task Replace(int index, ContentBlock block)
+    {
+        var at = IndexOfDrawn(index, block);
+        return at < 0 ? Task.CompletedTask : Update(ContentDocumentOperations.Replace(Latest, at, block));
+    }
+
+    private Task MoveBlock(int index, ContentBlock drawn, int delta)
+    {
+        var at = IndexOfDrawn(index, drawn);
+        return at < 0 ? Task.CompletedTask : Update(ContentDocumentOperations.Move(Latest, at, delta));
+    }
+
+    private Task RemoveBlock(int index, ContentBlock drawn)
+    {
+        var at = IndexOfDrawn(index, drawn);
+        return at < 0 ? Task.CompletedTask : Update(ContentDocumentOperations.Remove(Latest, at));
+    }
+
+    private bool HoldsSomething(int index, ContentBlock drawn)
+    {
+        var at = IndexOfDrawn(index, drawn);
+        return at >= 0 && !WritingContent.IsEmpty(Latest.Blocks[at]);
+    }
+
+    // An edit from a writing surface. Nothing here may await first: see ScriptEditorBase.ReceiveEdit.
+    private Task WriteNodes(int index, string id, ImmutableArray<RichTextNode> nodes)
+    {
+        var at = IndexOfDrawn(index, typeof(RichTextBlock), id);
+        if (at >= 0)
+        {
+            return Replace(at, (RichTextBlock)Latest.Blocks[at] with { Nodes = nodes });
+        }
+
+        // The first thing typed or inserted in an empty place makes a block there. Otherwise the block has gone.
+        return nodes.IsEmpty || PlaceOf(id) is not { } place
             ? Task.CompletedTask
-            : Replace(index, (RichTextBlock)blocks[index] with { Nodes = nodes });
+            : Update(ContentDocumentOperations.Add(Latest, IndexOf(place), new RichTextBlock(id, nodes)));
+    }
+
+    // A block inserted from a writing surface, before the node at nodeIndex. See WritingBlock.InsertBlockAt.
+    private Task InsertBlockAt(int index, string id, int nodeIndex, ContentBlock inserted)
+    {
+        var at = IndexOfDrawn(index, typeof(RichTextBlock), id);
+        if (at < 0)
+        {
+            return PlaceOf(id) is { } place
+                ? Update(ContentDocumentOperations.Add(Latest, IndexOf(place), inserted))
+                : Task.CompletedTask;
+        }
+
+        // At either end there is nothing to split, and splitting would give the block a new identity.
+        var nodes = ((RichTextBlock)Latest.Blocks[at]).Nodes;
+        var length = nodes.IsDefault ? 0 : nodes.Length;
+        return Update(nodeIndex <= 0 ? ContentDocumentOperations.Add(Latest, at, inserted)
+            : nodeIndex >= length ? ContentDocumentOperations.Add(Latest, at + 1, inserted)
+            : ContentDocumentOperations.SplitRichText(Latest, at, nodeIndex, inserted));
+    }
+
+    private IReadOnlyList<InsertChoice> TextInsertChoices =>
+    [
+        .. InsertChoice.ForNodes(MaxDepth),
+        .. Choices.Where(choice => !choice.IsText).Select(choice => new InsertChoice(choice.Label, choice.NeedsMedia, null, choice.Create)),
+    ];
+
+    // The blocks as drawn. In Write mode, wherever two neighbours (or an end of the document) leave no rich text
+    // block to type in, an empty place is drawn too. It is not part of the document until something is typed there.
+    private List<ShownBlock> ShownBlocks()
+    {
+        var blocks = Blocks;
+        var shown = new List<ShownBlock>(blocks.Length);
+        var places = new List<EmptyPlace>();
+        for (var gap = 0; gap <= blocks.Length; gap++)
+        {
+            var before = gap > 0 ? blocks[gap - 1] : null;
+            var after = gap < blocks.Length ? blocks[gap] : null;
+            if (Mode == RichContentEditorMode.Write && before is not RichTextBlock && after is not RichTextBlock)
+            {
+                // A place between the same neighbours as last time is the same place. Its id is the one the block
+                // will have, so it is also its key, before and after.
+                var place = _places.Find(old => old.PreviousId == before?.Id && old.NextId == after?.Id && !places.Contains(old))
+                    ?? new EmptyPlace(NewId(), before?.Id, after?.Id);
+                places.Add(place);
+                shown.Add(new(new RichTextBlock(place.Id, []), -1, place.Id, IsPlace: true));
+            }
+
+            if (after is not null)
+            {
+                shown.Add(new(after, gap, KeyFor(after, gap), IsPlace: false));
+            }
+        }
+
+        _places = places;
+        return shown;
+    }
+
+    private EmptyPlace? PlaceOf(string id) => _places.Find(place => string.Equals(place.Id, id, StringComparison.Ordinal));
+
+    // Where in the latest document a place is.
+    private int IndexOf(EmptyPlace place)
+    {
+        var blocks = (Latest.Blocks.IsDefault ? [] : Latest.Blocks).ToList();
+        if (place.PreviousId is { } previous && blocks.FindIndex(block => block.Id == previous) is var found && found >= 0)
+        {
+            return found + 1;
+        }
+
+        if (place.NextId is { } next && blocks.FindIndex(block => block.Id == next) is var following && following >= 0)
+        {
+            return following;
+        }
+
+        return place.PreviousId is null ? 0 : blocks.Count;
     }
 
     private Dictionary<string, object?> ExtensionParameters(ExtensionBlock extension, int index) => new()

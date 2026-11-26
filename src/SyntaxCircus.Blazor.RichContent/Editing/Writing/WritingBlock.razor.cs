@@ -1,5 +1,4 @@
 ﻿using System.Collections.Immutable;
-using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.Components;
 using SyntaxCircus.Blazor.RichContent.Editing.Surfaces;
@@ -7,17 +6,26 @@ using SyntaxCircus.RichContent;
 
 namespace SyntaxCircus.Blazor.RichContent.Editing.Writing;
 
-/// <summary>One node list in Write mode: writing surfaces, with the nodes they cannot edit between them.</summary>
+/// <summary>
+/// One node list in Write mode: cards for the code blocks, images, tables and anything that cannot be edited exactly,
+/// with a writing surface before, between and after them. A surface with no prose to hold is somewhere to type,
+/// which stores nothing until something is typed there.
+/// </summary>
 public partial class WritingBlock
 {
-    private const int PreviewCharacters = 200;
-
     // A stretch of the node list. The object is the component key, so it outlives edits that change its length.
-    private sealed class Part(SegmentKind kind, int count)
+    private sealed class Part(WritingBlock owner, SegmentKind kind) : IInsertPlace
     {
         public SegmentKind Kind { get; } = kind;
 
-        public int Count { get; set; } = count;
+        public int Count { get; set; }
+
+        /// <summary>The surface that shows this part, once drawn.</summary>
+        public RichTextSurface? Surface { get; set; }
+
+        public IReadOnlyList<InsertChoice> Choices => owner.InsertChoices;
+
+        public Task InsertAsync(int choice, int nodesBefore) => owner.InsertAsync(this, choice, nodesBefore);
     }
 
     private List<Part> _parts = [];
@@ -26,13 +34,35 @@ public partial class WritingBlock
     private ImmutableArray<RichTextNode> _nodes = [];
     private ImmutableArray<RichTextNode> _parameter;
 
+    // The node Insert made last, whose card takes the focus when it appears.
+    private RichTextNode? _inserted;
+
+    [Inject] private RichContentEditorOptions Options { get; set; } = default!;
+
     [Parameter] public ImmutableArray<RichTextNode> Nodes { get; set; } = [];
 
+    /// <summary>
+    /// Raised for each edit. A handler must store the nodes before its first incomplete await, so that a click made
+    /// after typing sees them.
+    /// </summary>
     [Parameter] public EventCallback<ImmutableArray<RichTextNode>> NodesChanged { get; set; }
 
     [Parameter] public bool Disabled { get; set; }
 
     [Parameter] public string Label { get; set; } = "Rich text";
+
+    [Parameter] public int MaxDepth { get; set; } = RichContentLimits.Default.Depth;
+
+    /// <summary>What Insert offers in these surfaces. With nothing, Insert is not offered.</summary>
+    [Parameter] public IReadOnlyList<InsertChoice> InsertChoices { get; set; } = [];
+
+    /// <summary>
+    /// Raised to insert a block before the node at <c>NodeIndex</c>, which splits the rich text block there (see
+    /// <c>ContentDocumentOperations.SplitRichText</c>). With the index between two nodes, this component keeps only
+    /// the nodes before it, so a handler must make that split and pass those nodes back. At either end it keeps them
+    /// all, and the block goes beside it.
+    /// </summary>
+    [Parameter] public EventCallback<(int NodeIndex, ContentBlock Block)> InsertBlockAt { get; set; }
 
     protected override void OnParametersSet()
     {
@@ -46,43 +76,71 @@ public partial class WritingBlock
         }
 
         _parameter = incoming;
-        var before = _nodes;
-        _nodes = incoming;
-        if (_parts.Count == 0 || !SameObjects(incoming.AsSpan(), before.AsSpan()))
+        if (_parts.Count == 0 || !SameObjects(incoming.AsSpan(), _nodes.AsSpan()))
         {
-            Plan(before);
+            Commit(incoming, Plan(incoming, replaced: true));
+        }
+        else
+        {
+            _nodes = incoming;
         }
     }
 
+    // Surfaces and cards by turns, beginning and ending with a surface. A surface with no prose between two cards,
+    // before the first or after the last has no nodes.
+    private static List<Segment> Layout(ImmutableArray<RichTextNode> nodes)
+    {
+        var layout = new List<Segment>();
+        foreach (var segment in SurfacePlanner.Plan(nodes))
+        {
+            if (segment.Kind != SegmentKind.Surface && layout is not [.., { Kind: SegmentKind.Surface }])
+            {
+                layout.Add(new(SegmentKind.Surface, segment.Start, 0));
+            }
+
+            layout.Add(segment);
+        }
+
+        if (layout is not [.., { Kind: SegmentKind.Surface }])
+        {
+            layout.Add(new(SegmentKind.Surface, nodes.Length, 0));
+        }
+
+        return layout;
+    }
+
     // A part, and so its component, goes to the new segment that holds the same nodes, wherever that now is: the
-    // surface then keeps its text, caret, undo history and anything not yet delivered. The segments left over take
-    // the remaining parts of their kind in order, and their surfaces compare the new nodes with what they hold.
-    private void Plan(ImmutableArray<RichTextNode> before)
+    // surface then keeps its text, caret, undo history and anything not yet delivered.
+    //
+    // When the host replaced the nodes, the segments left over also take the parts of their kind in order, and their
+    // surfaces compare the new nodes with what they hold. When this component rearranged the nodes itself, those
+    // segments get new parts instead. A surface may not have heard of the change before it sends its next edit, and
+    // what an old part sends is ignored, where it would otherwise be put back over the change.
+    private (Part Part, int Count)[] Plan(ImmutableArray<RichTextNode> nodes, bool replaced)
     {
         var unused = new List<(Part Part, ImmutableArray<RichTextNode> Nodes)>(_parts.Count);
         var start = 0;
         foreach (var part in _parts)
         {
-            unused.Add((part, before.Slice(start, part.Count)));
+            unused.Add((part, _nodes.Slice(start, part.Count)));
             start += part.Count;
         }
 
-        var segments = SurfacePlanner.Plan(_nodes).ToList();
-        // Somewhere to type, which stores nothing until something is typed.
-        if (segments.Count == 0)
-        {
-            segments.Add(new(SegmentKind.Surface, 0, 0));
-        }
-
+        var segments = Layout(nodes);
         var parts = new Part?[segments.Count];
         // The same objects first, so that of two equal stretches each keeps its own.
         Match((held, now, _) => SameObjects(held.AsSpan(), now.AsSpan()));
-        // Then the same values in new objects, as after a reload. Only a surface's nodes are known to be shallow
-        // enough to serialize, and only a surface has anything to lose.
-        Match((held, now, kind) => kind == SegmentKind.Surface && string.Equals(Json(held), Json(now), StringComparison.Ordinal));
-        Match((_, _, _) => true);
+        if (replaced)
+        {
+            // Then the same values in new objects, as after a reload. A locked node may be too deep to serialize,
+            // and its card has nothing to lose.
+            Match((held, now, kind) => kind != SegmentKind.Locked && string.Equals(Json(held), Json(now), StringComparison.Ordinal));
+            // A surface with prose is rather given other prose than turned into an empty place.
+            Match((held, now, _) => held.IsEmpty == now.IsEmpty);
+            Match((_, _, _) => true);
+        }
 
-        _parts = [.. segments.Select((segment, index) => parts[index] ?? new Part(segment.Kind, segment.Count))];
+        return [.. segments.Select((segment, index) => (parts[index] ?? new Part(this, segment.Kind), segment.Count))];
 
         void Match(Func<ImmutableArray<RichTextNode>, ImmutableArray<RichTextNode>, SegmentKind, bool> matches)
         {
@@ -94,17 +152,40 @@ public partial class WritingBlock
                 }
 
                 var segment = segments[index];
-                var nodes = Slice(segment.Start, segment.Count);
-                var found = unused.FindIndex(
-                    old => old.Part.Kind == segment.Kind && matches(old.Nodes, nodes, segment.Kind));
+                var now = nodes.Slice(segment.Start, segment.Count);
+                var found = unused.FindIndex(old => old.Part.Kind == segment.Kind && matches(old.Nodes, now, segment.Kind));
                 if (found >= 0)
                 {
                     parts[index] = unused[found].Part;
-                    parts[index]!.Count = segment.Count;
                     unused.RemoveAt(found);
                 }
             }
         }
+    }
+
+    private void Commit(ImmutableArray<RichTextNode> nodes, (Part Part, int Count)[] plan)
+    {
+        _nodes = nodes;
+        _parts = [.. plan.Select(entry => entry.Part)];
+        foreach (var (part, count) in plan)
+        {
+            part.Count = count;
+        }
+    }
+
+    // Moves nodes about on the author's behalf. False, changing nothing, if that would redraw or drop a surface which
+    // shows something that could not be converted, and so exists only on screen.
+    private bool TryRearrange(ImmutableArray<RichTextNode> nodes)
+    {
+        var plan = Plan(nodes, replaced: false);
+        var kept = plan.Select(entry => entry.Part).ToHashSet();
+        if (_parts.Exists(part => !kept.Contains(part) && part.Surface is { HasRejectedEdit: true }))
+        {
+            return false;
+        }
+
+        Commit(nodes, plan);
+        return true;
     }
 
     private static bool SameObjects(ReadOnlySpan<RichTextNode> left, ReadOnlySpan<RichTextNode> right) =>
@@ -115,20 +196,111 @@ public partial class WritingBlock
 
     private ImmutableArray<RichTextNode> Slice(int start, int count) => _nodes.Slice(start, count);
 
-    // Nothing here may await first: see RichTextSurface.ReceiveEdit.
-    private Task SurfaceChanged(Part part, ImmutableArray<RichTextNode> changed)
+    // Where a part's nodes begin, or -1 for a part that is no longer shown.
+    private int StartOf(Part part)
     {
         var position = _parts.IndexOf(part);
-        if (position < 0)
+        return position < 0 ? -1 : _parts.Take(position).Sum(earlier => earlier.Count);
+    }
+
+    // Nothing here may await first: see ScriptEditorBase.ReceiveEdit.
+    private Task SurfaceChanged(Part part, ImmutableArray<RichTextNode> changed)
+    {
+        var start = StartOf(part);
+        if (start < 0)
         {
             return Task.CompletedTask;
         }
 
-        var start = _parts.Take(position).Sum(earlier => earlier.Count);
         var after = start + part.Count;
         _nodes = [.. _nodes.AsSpan(0, start), .. changed, .. _nodes.AsSpan(after, _nodes.Length - after)];
         part.Count = changed.Length;
         return NodesChanged.InvokeAsync(_nodes);
+    }
+
+    // Nor here: the edits of a code card and of table cells come this way.
+    private Task CardChanged(Part part, RichTextNode node)
+    {
+        var start = StartOf(part);
+        if (start < 0)
+        {
+            return Task.CompletedTask;
+        }
+
+        _nodes = _nodes.SetItem(start, node);
+        return NodesChanged.InvokeAsync(_nodes);
+    }
+
+    private bool HoldsSomething(Part part) =>
+        StartOf(part) is var start && start >= 0 && (part.Kind == SegmentKind.Locked || !WritingContent.IsEmpty(_nodes[start]));
+
+    private Task MoveCard(Part part, int delta)
+    {
+        var start = StartOf(part);
+        if (Disabled || start < 0 || start + delta < 0 || start + delta >= _nodes.Length)
+        {
+            return Task.CompletedTask;
+        }
+
+        return TryRearrange(RichTextEditorOperations.Move(_nodes, start, delta))
+            ? NodesChanged.InvokeAsync(_nodes)
+            : Task.CompletedTask;
+    }
+
+    private Task RemoveCard(Part part)
+    {
+        var start = StartOf(part);
+        return !Disabled && start >= 0 && TryRearrange(_nodes.RemoveAt(start))
+            ? NodesChanged.InvokeAsync(_nodes)
+            : Task.CompletedTask;
+    }
+
+    private async Task InsertAsync(Part part, int index, int nodesBefore)
+    {
+        var start = StartOf(part);
+        if (Disabled || start < 0 || index < 0 || index >= InsertChoices.Count)
+        {
+            return;
+        }
+
+        var choice = InsertChoices[index];
+        if (choice.NeedsMedia && Options.MediaPicker is null)
+        {
+            return;
+        }
+
+        var at = start + Math.Clamp(nodesBefore, 0, part.Count);
+        Task raised;
+        if (choice.NodeKind is { } kind)
+        {
+            var node = RichTextEditorOperations.Create(kind);
+            if (!TryRearrange(_nodes.Insert(at, node)))
+            {
+                return;
+            }
+
+            _inserted = node;
+            raised = NodesChanged.InvokeAsync(_nodes);
+        }
+        else if (choice.CreateBlock is { } create && InsertBlockAt.HasDelegate)
+        {
+            // Between two nodes, the ones from here on go to a block of their own, after the new one. This lets go
+            // of them first, so that nothing a surface sends meanwhile can bring them back here.
+            if (at > 0 && at < _nodes.Length && !TryRearrange([.. _nodes.AsSpan(0, at)]))
+            {
+                return;
+            }
+
+            raised = InsertBlockAt.InvokeAsync((at, create()));
+        }
+        else
+        {
+            return;
+        }
+
+        // This did not come in as an event of this component.
+        StateHasChanged();
+        await raised;
     }
 
     private static string NameOf(SegmentKind kind) => kind switch
@@ -138,33 +310,4 @@ public partial class WritingBlock
         SegmentKind.Table => "Table",
         _ => "Preserved content",
     };
-
-    // The start of the text, found without recursion: a locked node can be nested arbitrarily deeply.
-    private static string Preview(ImmutableArray<RichTextNode> nodes)
-    {
-        var text = new StringBuilder();
-        var pending = new Stack<RichTextNode?>(nodes.Reverse());
-        while (text.Length < PreviewCharacters && pending.TryPop(out var node))
-        {
-            if (node is null)
-            {
-                continue;
-            }
-
-            if ((node.Text ?? node.Alt) is { Length: > 0 } own)
-            {
-                text.Append(text.Length > 0 ? " " : "").Append(own);
-            }
-
-            if (!node.Children.IsDefaultOrEmpty)
-            {
-                for (var index = node.Children.Length - 1; index >= 0; index--)
-                {
-                    pending.Push(node.Children[index]);
-                }
-            }
-        }
-
-        return text.Length <= PreviewCharacters ? text.ToString() : text.ToString(0, PreviewCharacters);
-    }
 }

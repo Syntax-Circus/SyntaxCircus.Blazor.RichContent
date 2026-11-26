@@ -1,8 +1,9 @@
+@using SyntaxCircus.Blazor.RichContent.Editing.Writing
 <div class="fields">
-    <label>Heading<input type="text" value="@Block.Heading" @oninput="e => Update(Block with { Heading = Text(e) })" disabled="@Disabled" /></label>
-    <label>Body<textarea value="@Block.Body" @oninput="e => Update(Block with { Body = Optional(e) })" disabled="@Disabled" rows="3"></textarea></label>
-    <label>Button label<input type="text" value="@Block.Label" @oninput="e => Update(Block with { Label = Text(e) })" disabled="@Disabled" /></label>
-    <label>Button link<input type="text" value="@Block.Url" @oninput="e => Update(Block with { Url = Text(e) })" disabled="@Disabled" /></label>
+    <label>Heading<input type="text" value="@Block.Heading" maxlength="@FieldLength" @oninput="e => Update(Block with { Heading = Text(e) })" disabled="@Disabled" /></label>
+    <label>Body<textarea value="@Block.Body" maxlength="@FieldLength" @oninput="e => Update(Block with { Body = Optional(e) })" disabled="@Disabled" rows="3"></textarea></label>
+    <label>Button label<input type="text" value="@Block.Label" maxlength="@FieldLength" @oninput="e => Update(Block with { Label = Text(e) })" disabled="@Disabled" /></label>
+    <label>Button link<input type="text" value="@Block.Url" maxlength="@FieldLength" @oninput="e => Update(Block with { Url = Text(e) })" disabled="@Disabled" /></label>
 </div>
 
 @code {
@@ -11,6 +12,10 @@
     [Parameter] public EventCallback<CtaBlock> BlockChanged { get; set; }
 
     [Parameter] public bool Disabled { get; set; }
+
+    [CascadingParameter] private WritingSession? Session { get; set; }
+
+    private int? FieldLength => Session?.Writing == true ? WritingSession.FieldCharacters : null;
 
     private Task Update(CtaBlock block) => BlockChanged.InvokeAsync(block);
 

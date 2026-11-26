@@ -1,0 +1,80 @@
+@using Microsoft.JSInterop
+
+@* Removing cannot be undone, so where there is something to lose it asks first, in place. *@
+@if (_asking && !Disabled)
+{
+  <span class="rt-confirm" role="group" aria-label="@($"Confirm: {Label}")" data-rt-confirm>
+    <span>Remove?</span>
+    <button type="button" @onclick="YesAsync">Yes</button>
+    <button type="button" @ref="_no" @onclick="No">No</button>
+  </span>
+}
+else
+{
+  <button type="button" aria-label="@Label" title="@Label" disabled="@Disabled" @onclick="RemoveAsync">@Text</button>
+}
+
+@code {
+  private ElementReference _no;
+  private bool _asking;
+  private bool _focusNo;
+
+  [Parameter, EditorRequired] public string Label { get; set; } = "Remove";
+
+  [Parameter, EditorRequired] public string Text { get; set; } = "Remove";
+
+  [Parameter] public bool Disabled { get; set; }
+
+  /// <summary>Asked at the click: true if what would be removed holds anything.</summary>
+  [Parameter, EditorRequired] public Func<bool> NeedsConfirmation { get; set; } = () => true;
+
+  [Parameter] public EventCallback Confirmed { get; set; }
+
+  protected override void OnParametersSet()
+  {
+    if (Disabled)
+    {
+      _asking = false;
+    }
+  }
+
+  private Task RemoveAsync()
+  {
+    if (!NeedsConfirmation())
+    {
+      return Confirmed.InvokeAsync();
+    }
+
+    _asking = true;
+    _focusNo = true;
+    _no = default;
+    return Task.CompletedTask;
+  }
+
+  private Task YesAsync()
+  {
+    _asking = false;
+    return Confirmed.InvokeAsync();
+  }
+
+  private void No() => _asking = false;
+
+  protected override async Task OnAfterRenderAsync(bool firstRender)
+  {
+    // When renders lag, this can come before the button has been drawn.
+    if (!_focusNo || !_asking || _no.Id is null)
+    {
+      return;
+    }
+
+    _focusNo = false;
+    try
+    {
+      await _no.FocusAsync();
+    }
+    catch (Exception exception) when (exception is JSException or JSDisconnectedException or OperationCanceledException)
+    {
+      // Only a convenience for the keyboard.
+    }
+  }
+}

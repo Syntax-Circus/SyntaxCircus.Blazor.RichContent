@@ -694,6 +694,8 @@ export function createReader(root, inline) {
     const spaces = createSpaces(root);
     // Keys for what has no element of its own to carry one: loose text, and the second and later nodes of an element.
     let otherKeys = new WeakMap();
+    // For the latest read: each entry's key, and the first of the surface's children it was read from.
+    let sources = [];
 
     const keyFor = (source, index) => {
         const keys = otherKeys.get(source) ?? [];
@@ -703,6 +705,7 @@ export function createReader(root, inline) {
     };
 
     const readProse = textOf => {
+        sources = [];
         const only = root.childNodes.length === 1 ? root.firstElementChild : null;
         if (only?.hasAttribute(PLACEHOLDER) && only.textContent === '') {
             return [];
@@ -710,11 +713,15 @@ export function createReader(root, inline) {
 
         assignKeys(root);
         const result = [];
+        const add = (key, node, source) => {
+            result.push(entry(key, node));
+            sources.push({ key, source });
+        };
         let loose = [];
         const flush = () => {
             if (loose.length > 0) {
                 readSequence(split(loose, true), 'top', textOf)
-                    .forEach((node, index) => result.push(entry(keyFor(loose[0], index), node)));
+                    .forEach((node, index) => add(keyFor(loose[0], index), node, loose[0]));
                 loose = [];
             }
         };
@@ -723,7 +730,7 @@ export function createReader(root, inline) {
             if (isBlockElement(child)) {
                 flush();
                 readSequence(split([child]), 'top', textOf).forEach((node, index) =>
-                    result.push(entry(index === 0 ? child.getAttribute(KEY) : keyFor(child, index), node)));
+                    add(index === 0 ? child.getAttribute(KEY) : keyFor(child, index), node, child));
             } else {
                 loose.push(child);
             }
@@ -734,6 +741,14 @@ export function createReader(root, inline) {
     };
 
     return {
+        // The key of the last entry of the latest read that came from the surface's child, or from one before it.
+        // Null with no child, or none before it.
+        keyThrough(child) {
+            const found = child && sources.findLast(({ source }) =>
+                source === child || (source.compareDocumentPosition(child) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0);
+            return found ? found.key : null;
+        },
+
         // Call after buildSurface. keyedNodes are what it built.
         adopt() {
             otherKeys = new WeakMap();

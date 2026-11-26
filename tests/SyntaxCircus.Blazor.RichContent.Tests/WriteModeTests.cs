@@ -615,11 +615,12 @@ public sealed class WriteModeTests : IDisposable
         var before = Surfaces(editor);
         var syncs = Redraws().Length;
 
-        // New objects, with a locked node in front.
+        // New objects, with a locked node in front. Only the empty place now before that card is new.
         editor.Render(parameters => parameters.Add(e => e.Document, OneBlock([Locked(), .. Original()])));
 
-        Surfaces(editor).ShouldBe(before);
-        Redraws().Length.ShouldBe(syncs);
+        Surfaces(editor)[0].Nodes.ShouldBeEmpty();
+        Surfaces(editor)[1..].ShouldBe(before);
+        Redraws().Length.ShouldBe(++syncs);
 
         // One of the equal pair goes.
         editor.Render(parameters => parameters.Add(e => e.Document, OneBlock([.. Original()[2..]])));

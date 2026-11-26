@@ -3,9 +3,10 @@
 import { buildSurface, createReader } from './dom.js';
 import { createTransport } from './transport.js';
 import {
-    handleBeforeInput, handleKeydown, pasteText, prepareComposition, runCommand, selectionIn, selectionState,
-    surfaceFocused, wireToolbar,
+    activeSurface, handleBeforeInput, handleKeydown, pasteText, prepareComposition, runCommand, selectionIn,
+    selectionState, surfaceFocused, surfaceLeft, wireToolbar,
 } from './commands.js';
+import { childAtEnd, wireInsert } from './insert.js';
 
 const surfaces = new Map();
 
@@ -123,8 +124,9 @@ function isReconnecting() {
 }
 
 // A call made while the connection is down never settles, and Blazor leaves the failed send behind it as an
-// unhandled rejection. So no call is made then: it fails here, and what it carried is retried.
-function callDotNet(dotNetRef, method, ...args) {
+// unhandled rejection. So no call is made then: it fails here, and what it carried is retried. Every call to .NET
+// goes through here, the code card's too.
+export function callDotNet(dotNetRef, method, ...args) {
     return isReconnecting()
         ? Promise.reject(new Error('The connection is down.'))
         : dotNetRef.invokeMethodAsync(method, ...args);
@@ -132,10 +134,62 @@ function callDotNet(dotNetRef, method, ...args) {
 
 const isEditable = surface => surface.generation !== null && !surface.disabled;
 
+// The author is in this surface (again): the toolbar acts on it.
+function entered(surface) {
+    surface.left = false;
+    surfaceFocused(surface.element);
+}
+
+// The author has gone to work on something that is neither a surface nor the toolbar, such as a card. The toolbar must
+// not go on acting on a place the author is not in, so it lets go of this one until the focus comes back.
+function leave(surface) {
+    surface.left = true;
+    surfaceLeft(surface.element);
+    if (reported?.surface === surface) {
+        reported = null;
+    }
+
+    // With the connection down, .NET still shows the toolbar as it was. Its buttons do nothing here.
+    callDotNet(surface.dotNetRef, 'SurfaceLeft').catch(() => {});
+}
+
+// What the author types or chooses in. A button does neither.
+const FIELDS = 'textarea, select, input:not([type="button"], [type="submit"], [type="reset"], [type="image"]), '
+    + '[contenteditable]:not([contenteditable="false"])';
+
+// Called for each press and each move of the focus, anywhere in the page. Anything else in the editor is another place
+// in the document, and so is a field anywhere. A button or bare page outside the editor, such as the host's Save, is
+// not: after it, the toolbar still goes back to where the author was writing.
+function leaveIfElsewhere(surface, target) {
+    const editor = surface.element.closest('[data-rt-editor]');
+    if (!editor || surface.left || activeSurface(editor) !== surface.element) {
+        return;
+    }
+
+    if (!(target instanceof Element)) {
+        return;
+    }
+
+    const inside = editor.contains(target);
+    const part = target.closest('[data-rt-surface], [data-rt-toolbar-area]');
+    if (inside ? !part || !editor.contains(part) : target.closest(FIELDS) !== null) {
+        leave(surface);
+    }
+}
+
 // Tells .NET the formatting at the cursor, if it or the surface with the cursor has changed.
 function report(surface) {
     if (!isEditable(surface) || surface.composing) {
         return;
+    }
+
+    if (surface.left) {
+        // The selection can still lie here. Only the focus shows that the author is back.
+        if (document.activeElement !== surface.element) {
+            return;
+        }
+
+        entered(surface);
     }
 
     const state = selectionState(surface.element);
@@ -166,9 +220,10 @@ function requestLink(surface) {
     callDotNet(surface.dotNetRef, 'LinkRequested').catch(() => {});
 }
 
-// Gives the surface the focus and the selection it last had. False if it cannot take a command.
+// Gives the surface the focus and the selection it last had. False if it cannot take a command, as when the author
+// has since gone elsewhere.
 function activate(surface) {
-    if (!isEditable(surface) || surface.composing) {
+    if (!isEditable(surface) || surface.composing || surface.left) {
         return false;
     }
 
@@ -235,6 +290,8 @@ export function attach(element, dotNetRef, options) {
         pending: null,
         // The selection when it was last in the surface.
         saved: null,
+        // True once the author has gone elsewhere, until the focus comes back.
+        left: false,
         // Of the content shown. Null until it has been drawn in full.
         generation: null,
         disabled: false,
@@ -285,9 +342,15 @@ export function attach(element, dotNetRef, options) {
         }
     });
     on(element, 'focusin', () => {
-        surfaceFocused(element);
+        entered(surface);
         // Otherwise some browsers make a <div> on Enter.
         document.execCommand('defaultParagraphSeparator', false, 'p');
+        // The focus can come back with the selection as it was, which changes nothing that would be reported.
+        queueMicrotask(() => {
+            if (surfaces.get(element) === surface && document.activeElement === element) {
+                report(surface);
+            }
+        });
     });
     on(document, 'selectionchange', () => {
         const range = selectionIn(element);
@@ -340,6 +403,9 @@ export function attach(element, dotNetRef, options) {
     on(element, 'click', stay);
     on(element, 'auxclick', stay);
 
+    on(document, 'pointerdown', event => leaveIfElsewhere(surface, event.target), true);
+    on(document, 'focusin', event => leaveIfElsewhere(surface, event.target), true);
+
     // Capture on the document runs before the event reaches what it is for, such as a Save button.
     on(document, 'pointerdown', () => surface.transport.nudge(), true);
     on(document, 'keydown', () => surface.transport.nudge(), true);
@@ -347,6 +413,10 @@ export function attach(element, dotNetRef, options) {
     addStyles();
     element.style.whiteSpace = 'pre-wrap';
     element.style.overflowWrap = 'break-word';
+    if (inline) {
+        // An empty table cell would otherwise have no height to click. A <br> to hold it open could not be clicked.
+        element.style.minHeight = '1.5em';
+    }
     surfaces.set(element, surface);
     // For tests.
     element.richContentSurface = surface;
@@ -404,10 +474,40 @@ function link(element, address) {
     }
 }
 
+// Asks .NET to insert a choice of the Insert menu where the cursor was last in this surface. Called in the click, with
+// everything typed already sent or sent here first, so that .NET splits what it has.
+function insert(element, choice) {
+    const surface = surfaces.get(element);
+    // With the connection down nothing is inserted, and nothing else changes.
+    if (!surface || !isEditable(surface) || surface.composing || surface.left || isReconnecting()) {
+        return;
+    }
+
+    const range = selectionIn(element) ?? surface.saved;
+    if (!range || !element.contains(range.endContainer)) {
+        return;
+    }
+
+    flush(surface);
+    const after = surface.reader.keyThrough(childAtEnd(element, range));
+    const sent = surface.transport.newest;
+    // This surface is about to be rewritten, or the author's attention to go to what is inserted. So nothing more is
+    // typed here, where it could be lost, and the toolbar lets go of it.
+    leave(surface);
+    element.blur();
+    callDotNet(surface.dotNetRef, 'InsertRequested', choice, after, sent).catch(() => {});
+}
+
 // area holds the toolbar and, while it is open, the link box.
 export function attachToolbar(area) {
     if (area) {
         wireToolbar(area, { run: command, restore, link });
+        wireInsert(area, choice => {
+            const element = activeSurface(area.closest('[data-rt-editor]'));
+            if (element) {
+                insert(element, choice);
+            }
+        });
     }
 }
 

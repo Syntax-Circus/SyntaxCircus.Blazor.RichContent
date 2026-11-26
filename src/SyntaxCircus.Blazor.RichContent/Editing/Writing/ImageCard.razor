@@ -1,0 +1,99 @@
+@using Microsoft.Extensions.DependencyInjection
+@using Microsoft.Extensions.Logging
+@using Microsoft.JSInterop
+@inject IServiceProvider Services
+@inject ILogger<ImageCard> Logger
+
+<div class="fields">
+  @if (Preview is { } media)
+  {
+    <img class="rt-image-preview" src="@media.Src" srcset="@media.SrcSet" sizes="@media.Sizes" width="@media.Width" height="@media.Height" alt="@Current.Alt" />
+  }
+  else
+  {
+    <p class="hint">No preview.</p>
+  }
+  <div class="field">Image <MediaPickerField Value="Current.Media" ValueChanged="MediaChanged" Disabled="Disabled" /></div>
+  <label>Alt text<input @ref="_alt" type="text" value="@Current.Alt" maxlength="@WritingSession.FieldCharacters" disabled="@Disabled" @oninput="AltChanged" /></label>
+  <label>Caption<input type="text" value="@Current.Caption" maxlength="@WritingSession.FieldCharacters" disabled="@Disabled" @oninput="CaptionChanged" /></label>
+</div>
+
+@code {
+  private ElementReference _alt;
+  private RichTextNode? _node;
+  private RichTextNode? _parameter;
+  private bool _focused;
+
+  [Parameter, EditorRequired] public RichTextNode Node { get; set; } = default!;
+
+  [Parameter] public EventCallback<RichTextNode> NodeChanged { get; set; }
+
+  [Parameter] public bool Disabled { get; set; }
+
+  /// <summary>Takes the focus once it has been drawn.</summary>
+  [Parameter] public bool FocusOnStart { get; set; }
+
+  // The latest node: what was passed in, with every edit since.
+  private RichTextNode Current => _node ?? Node;
+
+  private ResolvedMedia? Preview
+  {
+    get
+    {
+      if (Current.Media is not { Id.Length: > 0 } reference)
+      {
+        return null;
+      }
+
+      try
+      {
+        return Services.GetService<IRichContentMediaResolver>()?.Resolve(reference) is { Src.Length: > 0 } resolved ? resolved : null;
+      }
+      catch (Exception exception)
+      {
+        // A preview is not worth the circuit.
+        Logger.LogError(exception, "The media resolver failed.");
+        return null;
+      }
+    }
+  }
+
+  protected override void OnParametersSet()
+  {
+    if (!ReferenceEquals(Node, _parameter))
+    {
+      _parameter = _node = Node;
+    }
+  }
+
+  protected override async Task OnAfterRenderAsync(bool firstRender)
+  {
+    if (_focused || !FocusOnStart || _alt.Id is null)
+    {
+      return;
+    }
+
+    _focused = true;
+    try
+    {
+      await _alt.FocusAsync();
+    }
+    catch (Exception exception) when (exception is JSException or JSDisconnectedException or OperationCanceledException)
+    {
+      // Only a convenience.
+    }
+  }
+
+  private Task Update(RichTextNode node)
+  {
+    _node = node;
+    return NodeChanged.InvokeAsync(node);
+  }
+
+  private Task MediaChanged(MediaRef? media) => Update(Current with { Media = media });
+
+  private Task AltChanged(ChangeEventArgs e) => Update(Current with { Alt = e.Value?.ToString() ?? "" });
+
+  private Task CaptionChanged(ChangeEventArgs e) =>
+    Update(Current with { Caption = string.IsNullOrEmpty(e.Value?.ToString()) ? null : e.Value!.ToString() });
+}

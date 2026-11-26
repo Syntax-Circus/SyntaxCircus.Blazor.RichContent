@@ -54,6 +54,8 @@ export function createTransport({ invoke, snapshot, complete = false }) {
     let stallTimer = null;
     let stallDelay = FIRST_STALL;
     let disposed = false;
+    // The sequence number of the newest patch sent since the last redraw, or 0.
+    let newest = 0;
 
     const clearTimers = () => {
         clearTimeout(retryTimer);
@@ -192,6 +194,7 @@ export function createTransport({ invoke, snapshot, complete = false }) {
             changed: entries.filter(entry => changed.has(entry.key)).map(({ key, node }) => ({ key, node })),
         }));
         const sequence = ++lastSequence;
+        newest = sequence;
         const record = { sequence, cumulative, touched, status: 'pending', sentAt: performance.now() };
         records.push(record);
 
@@ -211,6 +214,10 @@ export function createTransport({ invoke, snapshot, complete = false }) {
         // Replaceable, so that tests can lose messages.
         invoke,
 
+        get newest() {
+            return newest;
+        },
+
         // How many patches are not yet known to have got through. For tests.
         get unacknowledged() {
             return records.length;
@@ -223,6 +230,7 @@ export function createTransport({ invoke, snapshot, complete = false }) {
             lastOrder = entries.map(entry => entry.key);
             lastSent = new Map(entries.map(entry => [entry.key, entry.signature]));
             records = [];
+            newest = 0;
             clearTimers();
         },
 

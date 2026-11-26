@@ -1,0 +1,25 @@
+@using SyntaxCircus.Blazor.RichContent.Editing.Surfaces
+@inherits ScriptEditorBase
+
+<div class="fields">
+  <label>Language
+    <select value="@(Current.Language ?? "")" disabled="@Disabled" @onchange="LanguageChanged">
+      <option value="" selected="@string.IsNullOrEmpty(Current.Language)">Plain text</option>
+      @foreach (var language in RichTextNodeEditor.LanguageChoicesFor(Current.Language))
+      {
+        <option value="@language" selected="@(language == Current.Language)">@language</option>
+      }
+    </select>
+  </label>
+  @if (LoadFailed)
+  {
+    <p class="rt-surface-failed" role="alert">The code editor could not be loaded.</p>
+    <pre>@Current.Text</pre>
+  }
+  else
+  {
+    @* The script owns the text, so none is ever rendered into it. It is read-only until the script has filled it. *@
+    <textarea @ref="Element" class="rt-code-input" data-rt-code aria-label="Code" readonly rows="8" spellcheck="false" autocomplete="off" autocapitalize="off"></textarea>
+    <p class="hint">Tab inserts spaces. Press Escape, then Tab, to leave.</p>
+  }
+</div>

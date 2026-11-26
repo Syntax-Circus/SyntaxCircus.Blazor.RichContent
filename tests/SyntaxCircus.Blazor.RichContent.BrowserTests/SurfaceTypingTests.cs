@@ -88,7 +88,8 @@ public class SurfaceTypingTests(SampleHost host) : SurfaceTest(host)
         await Page.EvaluateAsync("""
             () => {
                 for (const surface of document.querySelectorAll('[data-rt-surface]')) {
-                    for (const element of surface.children) {
+                    // Not an empty place's paragraph, which stores nothing.
+                    for (const element of surface.querySelectorAll(':scope > :not([data-rt-placeholder])')) {
                         const text = document.createTreeWalker(element, NodeFilter.SHOW_TEXT).nextNode();
                         text.appendData('x');
                         surface.dispatchEvent(new InputEvent('input', { bubbles: true }));
@@ -153,9 +154,12 @@ public class SurfaceTypingTests(SampleHost host) : SurfaceTest(host)
         await Page.EvaluateAsync("""
             () => {
                 // Many edits in one task, in two blocks, so that renders cannot keep up between them.
-                const surfaces = [...document.querySelectorAll('[data-rt-surface]')];
+                const surfaces = [
+                    document.querySelectorAll('[data-block-id="prose"] [data-rt-surface]')[1],
+                    document.querySelector('[data-block-id="more-prose"] [data-rt-surface]'),
+                ];
                 for (let i = 0; i < 30; i++) {
-                    for (const surface of [surfaces[1], surfaces[3]]) {
+                    for (const surface of surfaces) {
                         surface.focus();
                         const text = document.createTreeWalker(surface, NodeFilter.SHOW_TEXT).nextNode();
                         text.appendData('.');

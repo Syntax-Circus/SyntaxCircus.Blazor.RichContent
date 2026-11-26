@@ -6,7 +6,16 @@ namespace SyntaxCircus.Blazor.RichContent.Editing.Writing;
 /// <summary>What one editor's surfaces share with its toolbar: which surface it acts on, and the state there.</summary>
 internal sealed class WritingSession
 {
+    /// <summary>
+    /// The longest a field sent in one message may be in Write mode, so that the message stays within SignalR's
+    /// default limit. The content rules allow less in every such field.
+    /// </summary>
+    public const int FieldCharacters = 4000;
+
     public RichContentLimits Limits { get; set; } = RichContentLimits.Default;
+
+    /// <summary>True while the editor is in Write mode, which the block editors inside it follow.</summary>
+    public bool Writing { get; set; }
 
     /// <summary>The surface that last had the cursor, which is the one the toolbar acts on.</summary>
     public RichTextSurface? Surface { get; private set; }

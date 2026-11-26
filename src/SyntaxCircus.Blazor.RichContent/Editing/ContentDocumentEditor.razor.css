@@ -56,6 +56,29 @@
     margin: 0;
 }
 
+.doc-editor ::deep textarea.rt-code-input {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    tab-size: 4;
+}
+
+.doc-editor ::deep .rt-image-preview {
+    max-width: 100%;
+    height: auto;
+}
+
+.doc-editor ::deep .rt-table-scroll {
+    overflow-x: auto;
+}
+
+/* Without these, a column whose cells are all empty has no width, and cannot be clicked. */
+.doc-editor ::deep .rt-table td {
+    min-width: 6rem;
+}
+
+.doc-editor ::deep .rt-table [data-rt-surface] {
+    min-width: 6rem;
+}
+
 .insert-menu > summary {
     cursor: pointer;
     color: #17489e;

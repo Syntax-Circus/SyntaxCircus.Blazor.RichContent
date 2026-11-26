@@ -16,23 +16,35 @@
         <p class="error" role="alert">@error.Message</p>
     }
     @Menu(0, true, inserted => Update(ContentDocumentOperations.Add(Latest, 0, inserted)))
-    @for (var i = 0; i < Blocks.Length; i++)
+    @foreach (var shown in ShownBlocks())
     {
-        var index = i;
-        var block = Blocks[index];
-        <section class="block" @key="KeyFor(block, index)" data-block-id="@block.Id" data-block-kind="@KindOf(block)">
-            <header>
-                <strong>@TitleOf(block)</strong>
-                <div class="actions">
-                    <button type="button" disabled="@(Disabled || index == 0)" @onclick="() => Update(ContentDocumentOperations.Move(Latest, index, -1))">Move up</button>
-                    <button type="button" disabled="@(Disabled || index == Blocks.Length - 1)" @onclick="() => Update(ContentDocumentOperations.Move(Latest, index, 1))">Move down</button>
-                    <button type="button" disabled="@Disabled" @onclick="() => Update(ContentDocumentOperations.Remove(Latest, index))">Remove</button>
-                </div>
-            </header>
+        var index = shown.Index;
+        var block = shown.Block;
+        @* An empty place is drawn as the block it will become, so that typing in it keeps its components. *@
+        <section class="block" @key="shown.Key" data-block-id="@(shown.IsPlace ? null : block.Id)" data-block-kind="@(shown.IsPlace ? null : KindOf(block))" data-rt-place="@shown.IsPlace">
+            @if (!shown.IsPlace)
+            {
+                <header>
+                    <strong>@TitleOf(block)</strong>
+                    <div class="actions">
+                        <button type="button" disabled="@(Disabled || index == 0)" @onclick="() => MoveBlock(index, block, -1)">Move up</button>
+                        <button type="button" disabled="@(Disabled || index == Blocks.Length - 1)" @onclick="() => MoveBlock(index, block, 1)">Move down</button>
+                        @if (Mode == RichContentEditorMode.Write && block is not RichTextBlock)
+                        {
+                            <RemoveButton Label="Remove" Text="Remove" Disabled="Disabled" NeedsConfirmation="() => HoldsSomething(index, block)" Confirmed="() => RemoveBlock(index, block)" />
+                        }
+                        else
+                        {
+                            <button type="button" disabled="@Disabled" @onclick="() => RemoveBlock(index, block)">Remove</button>
+                        }
+                    </div>
+                </header>
+            }
             @switch (block)
             {
                 case RichTextBlock rich when Mode == RichContentEditorMode.Write:
-                    <WritingBlock Nodes="rich.Nodes" NodesChanged="nodes => WriteNodes(index, rich.Id, nodes)" Disabled="Disabled" Label="Text block" />
+                    <WritingBlock Nodes="rich.Nodes" NodesChanged="nodes => WriteNodes(index, rich.Id, nodes)" Disabled="Disabled" Label="Text block" MaxDepth="MaxDepth"
+                                  InsertChoices="TextInsertChoices" InsertBlockAt="at => InsertBlockAt(index, rich.Id, at.NodeIndex, at.Block)" />
                     break;
                 case RichTextBlock rich:
                     <RichTextEditor Nodes="rich.Nodes" NodesChanged="nodes => Replace(index, rich with { Nodes = nodes })" Disabled="Disabled" Label="Text block" MaxDepth="MaxDepth"
@@ -73,7 +85,10 @@
                 </ul>
             }
         </section>
-        @Menu(index + 1, true, inserted => Update(ContentDocumentOperations.Add(Latest, index + 1, inserted)))
+        @if (!shown.IsPlace)
+        {
+            @Menu(index + 1, true, inserted => Update(ContentDocumentOperations.Add(Latest, index + 1, inserted)))
+        }
     }
 </CascadingValue>
 </div>

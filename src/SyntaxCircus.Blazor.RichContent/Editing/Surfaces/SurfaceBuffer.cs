@@ -15,6 +15,8 @@ internal sealed class SurfaceBuffer(bool inline = false)
     private Dictionary<string, RichTextNode?> _known = new(StringComparer.Ordinal);
     private ImmutableArray<RichTextNode> _nodes = [];
     private ImmutableArray<string> _nodeKeys = [];
+    // Every key the browser has, in order, including those with nothing stored.
+    private string[] _order = [];
 
     // Never restarts, so a key cannot come to mean another node. The browser must name its own keys differently.
     private long _lastKey;
@@ -38,6 +40,7 @@ internal sealed class SurfaceBuffer(bool inline = false)
         _known = known;
         _nodes = nodes;
         _nodeKeys = [.. keyed.Select(entry => entry.Key)];
+        _order = [.. _nodeKeys];
         Generation++;
         return keyed;
     }
@@ -118,12 +121,39 @@ internal sealed class SurfaceBuffer(bool inline = false)
         _known = next;
         _nodes = nodes.ToImmutable();
         _nodeKeys = nodeKeys.ToImmutable();
+        _order = patch.Order;
         return _nodes;
+    }
+
+    /// <summary>
+    /// How many of the surface's nodes come at or before <paramref name="key"/>, which may be one that stores
+    /// nothing: 0 for null, and null for a key the surface does not have.
+    /// </summary>
+    public int? CountThrough(string? key)
+    {
+        if (key is null)
+        {
+            return 0;
+        }
+
+        var end = Array.IndexOf(_order, key);
+        if (end < 0)
+        {
+            return null;
+        }
+
+        var through = _order.Take(end + 1).ToHashSet(StringComparer.Ordinal);
+        return _nodeKeys.Count(through.Contains);
     }
 
     /// <summary>True when the surface holds these values, whether or not they are the same objects.</summary>
     public bool Matches(ImmutableArray<RichTextNode> nodes) =>
-        string.Equals(Json(_nodes), Json(nodes.IsDefault ? [] : nodes), StringComparison.Ordinal);
+        string.Equals(Json(Comparable(_nodes)), Json(Comparable(nodes.IsDefault ? [] : nodes)), StringComparison.Ordinal);
+
+    // Inline content with nothing in it looks and edits the same as one empty text run, which is what the content
+    // rules ask a table cell to hold.
+    private ImmutableArray<RichTextNode> Comparable(ImmutableArray<RichTextNode> nodes) =>
+        inline && nodes.IsEmpty ? [RichTextEditorOperations.Create(RichTextNodeKind.Text)] : nodes;
 
     /// <summary>
     /// When the surface holds these values (see <see cref="Matches"/>), takes the new objects as its originals,

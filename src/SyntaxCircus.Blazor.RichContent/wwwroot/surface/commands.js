@@ -1181,6 +1181,19 @@ export function surfaceFocused(root) {
     }
 }
 
+// That surface, or null if the editor has none the toolbar may act on.
+export function activeSurface(editor) {
+    const found = editor ? active.get(editor) : null;
+    return found?.isConnected ? found : null;
+}
+
+export function surfaceLeft(root) {
+    const editor = root.closest('[data-rt-editor]');
+    if (editor && active.get(editor) === root) {
+        active.delete(editor);
+    }
+}
+
 // The address .NET has accepted for exactly what the link box holds now, or null. .NET alone decides what may be
 // linked: it puts both on the Apply button once it has checked what was typed.
 function checkedAddress(area) {
@@ -1195,10 +1208,7 @@ function checkedAddress(area) {
 // link(surfaceElement, address) makes or removes a link and has the box closed.
 export function wireToolbar(area, { run, restore, link }) {
     const toolbar = area.querySelector('[data-rt-toolbar]');
-    const surface = () => {
-        const found = active.get(area.closest('[data-rt-editor]'));
-        return found?.isConnected ? found : null;
-    };
+    const surface = () => activeSurface(area.closest('[data-rt-editor]'));
     // Where the browser can act at once, the event goes no further, so that .NET does not act on it as well. Otherwise
     // it reaches .NET, which checks the address and runs the command itself.
     const linkNow = (event, address) => {

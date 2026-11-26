@@ -1,0 +1,41 @@
+@using System.Text
+
+@* Content Write mode cannot reproduce exactly. It is only shown, and its node is kept as it is. *@
+<p class="hint">This content can be edited in Blocks mode only. It is kept unchanged.</p>
+<pre class="rt-locked-text">@Preview(Node)</pre>
+
+@code {
+  private const int PreviewCharacters = 4000;
+
+  [Parameter, EditorRequired] public RichTextNode Node { get; set; } = default!;
+
+  // The start of the text, found without recursion: a locked node can be nested arbitrarily deeply.
+  private static string Preview(RichTextNode? root)
+  {
+    var text = new StringBuilder();
+    var pending = new Stack<RichTextNode?>();
+    pending.Push(root);
+    while (text.Length < PreviewCharacters && pending.TryPop(out var node))
+    {
+      if (node is null)
+      {
+        continue;
+      }
+
+      if ((node.Text ?? node.Alt) is { Length: > 0 } own)
+      {
+        text.Append(text.Length > 0 ? " " : "").Append(own);
+      }
+
+      if (!node.Children.IsDefaultOrEmpty)
+      {
+        for (var index = node.Children.Length - 1; index >= 0; index--)
+        {
+          pending.Push(node.Children[index]);
+        }
+      }
+    }
+
+    return text.Length <= PreviewCharacters ? text.ToString() : text.ToString(0, PreviewCharacters);
+  }
+}

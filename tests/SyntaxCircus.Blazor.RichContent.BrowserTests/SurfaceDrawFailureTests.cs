@@ -140,6 +140,35 @@ public class SurfaceDrawFailureTests(SampleHost host) : SurfaceTest(host)
     }
 
     [Fact]
+    public async Task AFirstDrawOfACodeCardThatThrows_ShowsTheNotice_AndLeavesNothingToTypeIn()
+    {
+        // Broken before the cards exist.
+        await Page.AddInitScriptAsync("""
+            const value = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value');
+            Object.defineProperty(HTMLTextAreaElement.prototype, 'value', {
+                ...value,
+                set(text) {
+                    if (this.hasAttribute('data-rt-code')) {
+                        window.broken = [...(window.broken ?? []), this];
+                        throw new Error('deliberate first code draw failure');
+                    }
+
+                    value.set.call(this, text);
+                },
+            });
+            """);
+
+        await Page.GotoAsync(new Uri(_server.Address, "fixture/everything?mode=write").AbsoluteUri);
+
+        await Expect(Page.Locator(".rt-surface-failed").First).ToBeVisibleAsync(new() { Timeout = 30_000 });
+        await Expect(Page.Locator("textarea[data-rt-code]")).ToHaveCountAsync(0);
+        (await WaitForServerFailuresAsync("deliberate first code draw failure")).ShouldBeGreaterThan(0);
+        (await Page.EvaluateAsync<bool>("() => window.broken.length > 0 && window.broken.every(e => e.readOnly)")).ShouldBeTrue();
+        (await SaveAsync(Page)).ShouldBe(Original("everything"));
+        _server.Log.TakeFailures();
+    }
+
+    [Fact]
     public async Task AFirstDrawThatThrows_ShowsTheNotice_AndLeavesNothingEditable()
     {
         // Broken before the surfaces exist.

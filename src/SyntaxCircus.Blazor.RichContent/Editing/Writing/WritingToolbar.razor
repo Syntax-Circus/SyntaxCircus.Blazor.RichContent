@@ -4,10 +4,12 @@
 @implements IAsyncDisposable
 @inject IJSRuntime JS
 @inject ILogger<WritingToolbar> Logger
+@inject RichContentEditorOptions Options
 
-@* The script runs the buttons that carry data-rt-command, in the click itself, so that what they change is on its way
-   before anything clicked afterwards. Only the link goes through here, to have its address checked. *@
-<div @ref="_area" class="rt-toolbar-area">
+@* The script runs the buttons that carry data-rt-command or data-rt-insert, in the click itself, so that what they
+   change is on its way before anything clicked afterwards. Only the link goes through here, to have its address
+   checked. *@
+<div @ref="_area" class="rt-toolbar-area" data-rt-toolbar-area>
   <div class="rt-toolbar" role="toolbar" aria-label="Formatting" data-rt-toolbar>
     @Toggle("bold", "Bold", "B", "Control+B Meta+B", CanFormat, Selection?.Bold)
     @Toggle("italic", "Italic", "I", "Control+I Meta+I", CanFormat, Selection?.Italic)
@@ -23,12 +25,24 @@
     @Toggle("bullets", "Bulleted list", "• List", null, CanList, Selection?.List == "bullets")
     @Toggle("numbers", "Numbered list", "1. List", null, CanList, Selection?.List == "numbers")
     @Toggle("quote", "Quote", "Quote", null, CanQuote, Selection?.Quote)
+    <button type="button" aria-haspopup="true" aria-expanded="@(InsertOpen ? "true" : "false")" disabled="@(!CanInsert)" @onclick="ToggleInsert">Insert</button>
+    @if (InsertOpen)
+    {
+      var choices = Place!.Choices;
+      <div class="rt-insert-menu" role="group" aria-label="Insert">
+        @for (var i = 0; i < choices.Count; i++)
+        {
+          var blocked = choices[i].NeedsMedia && Options.MediaPicker is null;
+          <button type="button" data-rt-insert="@i" disabled="@blocked" title="@(blocked ? "No media picker is configured." : null)">@choices[i].Label</button>
+        }
+      </div>
+    }
   </div>
   @if (_linkTarget is not null)
   {
     <div @key="_linkOpening" class="rt-link-box" role="group" aria-label="Link">
       <label>Link address
-        <input @ref="_linkInput" data-rt-link-input type="text" inputmode="url" autocomplete="off" @bind="_address" @bind:event="oninput" @onkeydown="LinkKeyAsync" />
+        <input @ref="_linkInput" data-rt-link-input type="text" inputmode="url" autocomplete="off" maxlength="@WritingSession.FieldCharacters" @bind="_address" @bind:event="oninput" @onkeydown="LinkKeyAsync" />
       </label>
       @* Once the address as typed has been accepted, the script can apply it in the click itself. *@
       <button type="button" data-rt-link-apply data-rt-checked="@(CheckedAddress is null ? null : _address)" data-rt-address="@CheckedAddress" @onclick="ApplyLinkAsync">Apply link</button>
@@ -52,6 +66,8 @@
   private bool _refused;
   private bool _focusLinkInput;
   private int _linkOpening;
+  // The surface the Insert menu was opened for.
+  private RichTextSurface? _insertTarget;
   private bool _disposed;
 
   [CascadingParameter] private WritingSession? Session { get; set; }
@@ -70,6 +86,15 @@
   private bool CanStyle => CanList && Selection is { InListItem: false, Quote: false };
 
   private bool CanQuote => CanList && Selection is { InListItem: false };
+
+  private IInsertPlace? Place => Session?.Surface?.InsertPlace;
+
+  // Nothing can be inserted into a table cell, whose surface has no place for it.
+  private bool CanInsert => CanFormat && IsProse && Place is { Choices.Count: > 0 };
+
+  private bool InsertOpen => CanInsert && ReferenceEquals(_insertTarget, Session?.Surface);
+
+  private void ToggleInsert() => _insertTarget = InsertOpen ? null : Session?.Surface;
 
   private static string Pressed(bool? on) => on == true ? "true" : "false";
 
@@ -128,6 +153,12 @@
     if (_linkTarget is not null && !ReferenceEquals(_linkTarget, Session?.Surface))
     {
       _linkTarget = null;
+    }
+
+    // The menu does not reopen by itself if the cursor comes back.
+    if (_insertTarget is not null && !ReferenceEquals(_insertTarget, Session?.Surface))
+    {
+      _insertTarget = null;
     }
 
     StateHasChanged();

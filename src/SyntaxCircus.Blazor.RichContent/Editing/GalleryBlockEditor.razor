@@ -1,14 +1,15 @@
+@using SyntaxCircus.Blazor.RichContent.Editing.Writing
 @using System.Collections.Immutable
 @inject RichContentEditorOptions Options
 <div class="fields">
-    <label>Gallery title<input type="text" value="@Block.Title" @oninput="TitleChanged" disabled="@Disabled" /></label>
+    <label>Gallery title<input type="text" value="@Block.Title" maxlength="@FieldLength" @oninput="TitleChanged" disabled="@Disabled" /></label>
     @for (var i = 0; i < Images.Length; i++)
     {
         var index = i;
         <div class="child">
             <div class="field">Image @(index + 1) <MediaPickerField Value="Images[index].Media" ValueChanged="media => MediaChanged(index, media)" Disabled="Disabled" /></div>
-            <label>Alt text<input type="text" value="@Images[index].Alt" @oninput="e => AltChanged(index, e)" disabled="@Disabled" /></label>
-            <label>Caption<input type="text" value="@Images[index].Caption" @oninput="e => CaptionChanged(index, e)" disabled="@Disabled" /></label>
+            <label>Alt text<input type="text" value="@Images[index].Alt" maxlength="@FieldLength" @oninput="e => AltChanged(index, e)" disabled="@Disabled" /></label>
+            <label>Caption<input type="text" value="@Images[index].Caption" maxlength="@FieldLength" @oninput="e => CaptionChanged(index, e)" disabled="@Disabled" /></label>
             <div class="actions">
                 <button type="button" disabled="@(Disabled || index == 0)" @onclick="() => Move(index, -1)">Move up</button>
                 <button type="button" disabled="@(Disabled || index == Images.Length - 1)" @onclick="() => Move(index, 1)">Move down</button>
@@ -27,6 +28,10 @@
     [Parameter] public EventCallback<GalleryBlock> BlockChanged { get; set; }
 
     [Parameter] public bool Disabled { get; set; }
+
+    [CascadingParameter] private WritingSession? Session { get; set; }
+
+    private int? FieldLength => Session?.Writing == true ? WritingSession.FieldCharacters : null;
 
     private ImmutableArray<GalleryImage> Images => Block.Images.IsDefault ? [] : Block.Images;
 
