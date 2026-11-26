@@ -126,6 +126,38 @@ public class PageWatchTests(SampleHost host) : BrowserTest(host)
     }
 
     [Fact]
+    public async Task ACloseThatComesLateInANavigation_IsNotALostConnection()
+    {
+        await OpenFixtureAsync("empty");
+        // A page that is slow to answer, so that the one being left stays alive well after beforeunload.
+        await Page.RouteAsync("**/slow-page", async route =>
+        {
+            await Task.Delay(TimeSpan.FromSeconds(4));
+            await route.FulfillAsync(new() { ContentType = "text/html", Body = "<!doctype html><title>there</title>" });
+        });
+
+        // What Firefox does under load: it tells the page of the close well after beforeunload.
+        // The close is arranged beforehand: nothing can be asked of a page while it is being left.
+        await Page.EvaluateAsync("() => { setTimeout(() => window.__pageWatch.closeSockets(), 1500); location.href = '/slow-page'; }");
+        await Expect(Page).ToHaveTitleAsync("there", new() { Timeout = 30_000 });
+
+        // Only the close is in question: WebKit also reports Blazor's attempts to reconnect from a page that is going.
+        (await Watch.TakeFailuresAsync()).ShouldNotContain(f => f.Kind == PageFailureKind.ConnectionLost);
+    }
+
+    [Fact]
+    public async Task ALossLongAfterABeforeUnloadThatWasIgnored_IsRecordedAtTheNextLook()
+    {
+        await OpenFixtureAsync("empty");
+        await Page.EvaluateAsync("() => { window.dispatchEvent(new Event('beforeunload')); }");
+        await Task.Delay(TimeSpan.FromSeconds(1.5), TestContext.Current.CancellationToken);
+
+        await Page.EvaluateAsync(CloseSockets);
+
+        await ShouldRecordALostConnectionAsync();
+    }
+
+    [Fact]
     public async Task APageShownAgainAfterPageHide_IsWatchedAgain()
     {
         await OpenFixtureAsync("empty");

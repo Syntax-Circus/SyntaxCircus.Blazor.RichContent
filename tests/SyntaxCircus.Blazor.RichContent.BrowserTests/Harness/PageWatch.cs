@@ -34,23 +34,32 @@ public sealed class PageWatch
             // really is going: beforeunload also fires when it then stays (a download, a mailto: link, a response
             // with no content, a cancelled navigation). A page can be shown again, from the back/forward cache.
             //
-            // Chromium and WebKit close the socket of a departing page without telling it. Firefox tells it, just
-            // after beforeunload and before pagehide, however long the navigation then takes. So a loss that
-            // follows beforeunload closely is held: pagehide discards it, and if the page is still here when the
-            // watch next looks, it is recorded. Any other loss is reported at once, so that a reload cannot take
-            // it away.
-            const navigationClosesWithin = 1000;
+            // Chromium and WebKit close the socket of a departing page without telling it. Firefox tells it, after
+            // beforeunload and before pagehide, and under load more than a second after beforeunload. So no time
+            // limit tells such a close from a real loss. Every loss after beforeunload is held instead, and recorded
+            // unless pagehide follows:
+            // - if the page is still here when the watch next looks, it is recorded;
+            // - if beforeunload fires again, it is recorded at once: it came before the navigation that is starting,
+            //   so was no part of it. That is how a reload after a lost circuit cannot take the loss away.
+            // A loss with no beforeunload before it is recorded at once.
             let leaving = false;
-            let unloadAskedAt = -Infinity;
+            let unloadAsked = false;
             let held = [];
-            window.addEventListener('beforeunload', () => unloadAskedAt = performance.now());
+            const reportHeld = () => Promise.all(held.splice(0).map(detail => report('ConnectionLost', detail)));
+            window.addEventListener('beforeunload', () => {
+                reportHeld();
+                unloadAsked = true;
+            });
             window.addEventListener('pagehide', () => {
                 leaving = true;
                 held = [];
             });
-            window.addEventListener('pageshow', () => leaving = false);
+            window.addEventListener('pageshow', () => {
+                leaving = false;
+                unloadAsked = false;
+            });
             const lost = detail => {
-                if (performance.now() - unloadAskedAt < navigationClosesWithin) {
+                if (unloadAsked) {
                     held.push(detail);
                 } else {
                     report('ConnectionLost', detail);
@@ -85,7 +94,7 @@ public sealed class PageWatch
                     socket.addEventListener('close', () => resolve(), { once: true });
                     socket.close();
                 }))),
-                reportHeld: () => Promise.all(held.splice(0).map(detail => report('ConnectionLost', detail))),
+                reportHeld,
             };
         })();
         """;
