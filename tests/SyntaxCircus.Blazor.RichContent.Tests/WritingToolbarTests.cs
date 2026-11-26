@@ -62,6 +62,20 @@ public sealed class WritingToolbarTests : IDisposable
             .FindAll("[role=toolbar]").ShouldBeEmpty();
 
     [Fact]
+    public void LeavingWriteMode_TellsTheScriptToLetGoOfThatToolbar_AndANewOneIsNamedAnew()
+    {
+        var editor = Render();
+        var first = _module.Invocations["attachToolbar"].ShouldHaveSingleItem().Arguments[2];
+
+        editor.Render(parameters => parameters.Add(e => e.Mode, RichContentEditorMode.Blocks));
+
+        _module.Invocations["detachToolbar"].ShouldHaveSingleItem().Arguments[0].ShouldBe(first);
+        editor.Render(parameters => parameters.Add(e => e.Mode, RichContentEditorMode.Write));
+        _module.Invocations["attachToolbar"].Count.ShouldBe(2);
+        _module.Invocations["attachToolbar"][1].Arguments[2].ShouldNotBe(first);
+    }
+
+    [Fact]
     public async Task TheToolbar_FollowsTheReportedState_AndRaisesNoChange()
     {
         var changes = 0;

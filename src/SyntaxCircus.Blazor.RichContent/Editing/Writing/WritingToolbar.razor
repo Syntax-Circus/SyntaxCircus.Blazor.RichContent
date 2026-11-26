@@ -70,6 +70,8 @@
   private RichTextSurface? _insertTarget;
   private bool _disposed;
   private DotNetObjectReference<WritingToolbar>? _self;
+  // Names this toolbar to the script, which cannot be given its element once that has gone.
+  private readonly string _key = Guid.NewGuid().ToString("n");
   // The latest number the script asked to see, which tells it that what came before has been drawn. See freeze.js.
   private long _drawn;
 
@@ -138,7 +140,7 @@
 
         _module = module;
         _self = DotNetObjectReference.Create(this);
-        await module.InvokeVoidAsync("attachToolbar", _area, _self);
+        await module.InvokeVoidAsync("attachToolbar", _area, _self, _key);
       });
     }
 
@@ -301,6 +303,9 @@
 
     if (_module is { } module)
     {
+      // The script goes on asking this component to redraw until it is told to stop. Messages arrive in order, so once
+      // this has returned nothing more will be asked, and the reference below can go.
+      await InteropAsync(() => module.InvokeVoidAsync("detachToolbar", _key).AsTask());
       await InteropAsync(async () => await module.DisposeAsync());
     }
 

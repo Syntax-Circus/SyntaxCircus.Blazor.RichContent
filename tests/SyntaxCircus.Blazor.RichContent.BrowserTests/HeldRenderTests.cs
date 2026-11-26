@@ -16,7 +16,7 @@ public class HeldRenderTests(SampleHost host) : CardTest(host)
 
     // Added after the watch's own wrapper, so around it. Blazor sets onmessage; messages are handed to it in order,
     // or queued while held.
-    private const string HoldScript = """
+    internal const string HoldScript = """
         (() => {
             const Watched = window.WebSocket;
             const queue = [];

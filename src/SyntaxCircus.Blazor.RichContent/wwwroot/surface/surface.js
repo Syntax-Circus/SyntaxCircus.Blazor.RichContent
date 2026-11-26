@@ -7,7 +7,7 @@ import {
     selectionState, surfaceFocused, surfaceLeft, wireToolbar,
 } from './commands.js';
 import { childAtEnd, wireInsert } from './insert.js';
-import { freeze, isFrozen, whenThawed, wireFreeze } from './freeze.js';
+import { freeze, isFrozen, unwireFreeze, whenThawed, wireFreeze } from './freeze.js';
 
 const surfaces = new Map();
 
@@ -507,10 +507,11 @@ function insert(element, choice) {
     callDotNet(surface.dotNetRef, 'InsertRequested', choice, after, sent).catch(() => {});
 }
 
-// area holds the toolbar and, while it is open, the link box. toolbarRef is the toolbar's component.
-export function attachToolbar(area, toolbarRef) {
+// area holds the toolbar and, while it is open, the link box. toolbarRef is the toolbar's component, and key names it
+// to detachToolbar.
+export function attachToolbar(area, toolbarRef, key) {
     if (area) {
-        wireFreeze(area, number => callDotNet(toolbarRef, 'Redraw', number), isReconnecting);
+        wireFreeze(area, key, number => callDotNet(toolbarRef, 'Redraw', number), isReconnecting);
         wireToolbar(area, { run: command, restore, link });
         wireInsert(area, choice => {
             const element = activeSurface(area.closest('[data-rt-editor]'));
@@ -519,6 +520,11 @@ export function attachToolbar(area, toolbarRef) {
             }
         });
     }
+}
+
+// The toolbar is being disposed. What it listens to on its own elements goes with them.
+export function detachToolbar(key) {
+    unwireFreeze(key);
 }
 
 export function dispose(element) {

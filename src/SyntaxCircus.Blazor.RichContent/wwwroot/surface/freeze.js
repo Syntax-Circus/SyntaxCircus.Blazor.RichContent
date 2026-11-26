@@ -11,9 +11,13 @@ const FIRST_REPEAT = 500;
 const LONGEST_REPEAT = 5000;
 const DRAWN = 'data-rt-drawn';
 
-// By the editor's element: only for editors whose toolbar has started.
+// By the editor's element: only for editors whose toolbar has started and is still there. The editor's element stays
+// when its mode changes, while its toolbar goes and comes back, so what is kept here belongs to a toolbar.
 const editors = new WeakMap();
+// The same states by their toolbar's own key, which can name a toolbar whose elements have already gone.
+const toolbars = new Map();
 
+// The element is an editor's only in Write mode, which is when it carries the attribute.
 const editorOf = element => element.closest('[data-rt-editor]');
 
 export function isFrozen(element) {
@@ -53,6 +57,25 @@ function thaw(editor, state) {
         callback();
     }
 }
+
+// Forgets a toolbar's wiring: whatever it froze can be typed into again, and it listens and asks no more.
+function unwire(state) {
+    const { editor } = state;
+    toolbars.delete(state.key);
+    if (editors.get(editor) !== state) {
+        return;
+    }
+
+    // Forgotten first, so that nothing counts as frozen while it is thawed.
+    editors.delete(editor);
+    delete editor.richContentFreeze;
+    state.observer.disconnect();
+    state.listeners.abort();
+    thaw(editor, state);
+}
+
+// Whether the toolbar has gone from the page, or the editor has left Write mode.
+const isGone = state => !state.area.isConnected || !state.editor.hasAttribute('data-rt-editor');
 
 function thawIfDrawn(editor, state) {
     if (state.frozen && Number(state.area.getAttribute(DRAWN)) >= state.wanted) {
@@ -96,27 +119,54 @@ export function freeze(editor) {
     ask(editor, state, 0);
 }
 
-// area is the toolbar's, which .NET draws the numbers into. redraw(number) asks it to. down() is true while the
-// connection is known to be down. A button that rearranges the editor carries data-rt-rearrange.
-export function wireFreeze(area, redraw, down) {
+// area is the toolbar's, which .NET draws the numbers into, and key names that toolbar. redraw(number) asks it to.
+// down() is true while the connection is known to be down. A button that rearranges the editor carries
+// data-rt-rearrange. A later toolbar of the same editor takes over from an earlier one.
+export function wireFreeze(area, key, redraw, down) {
     const editor = editorOf(area);
-    if (!editor || editors.has(editor)) {
+    if (!editor || !area.isConnected) {
         return;
+    }
+
+    const earlier = editors.get(editor);
+    if (earlier) {
+        unwire(earlier);
     }
 
     // Numbers go on from what the toolbar already shows.
     const last = Number(area.getAttribute(DRAWN)) || 0;
     // ask is replaceable, so that tests can lose it.
-    const state = { area, ask: redraw, down, last, wanted: 0, frozen: false, timer: null, fields: [], waiting: [] };
+    const state = {
+        editor, area, key, ask: redraw, down, last, wanted: 0, frozen: false, timer: null, fields: [], waiting: [],
+        listeners: new AbortController(),
+    };
     editors.set(editor, state);
+    toolbars.set(key, state);
     // For tests.
     editor.richContentFreeze = state;
-    new MutationObserver(() => thawIfDrawn(editor, state)).observe(area, { attributes: true, attributeFilter: [DRAWN] });
+    state.observer = new MutationObserver(() => {
+        // The page itself shows when the toolbar has gone, whether or not .NET's word of it has arrived or ever does.
+        if (isGone(state)) {
+            unwire(state);
+        } else {
+            thawIfDrawn(editor, state);
+        }
+    });
+    state.observer.observe(area, { attributes: true, attributeFilter: [DRAWN] });
+    state.observer.observe(editor, { attributes: true, attributeFilter: ['data-rt-editor'], childList: true });
     // A click is what a pointer, Enter and Space all end in. Captured, so it comes before anything else can stop it.
     editor.addEventListener('click', event => {
         const button = event.target.closest?.('[data-rt-rearrange]');
-        if (button && !button.disabled) {
+        if (button && !button.disabled && !isGone(state)) {
             freeze(editor);
         }
-    }, true);
+    }, { capture: true, signal: state.listeners.signal });
+}
+
+// For a toolbar that is being disposed. Once this has returned, nothing asks anything of it.
+export function unwireFreeze(key) {
+    const state = toolbars.get(key);
+    if (state) {
+        unwire(state);
+    }
 }
