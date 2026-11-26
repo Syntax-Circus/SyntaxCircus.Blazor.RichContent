@@ -696,8 +696,70 @@ public class SurfaceCommandTests(SampleHost host) : SurfaceTest(host)
         }
     }
 
+    // For each character stored as plain, whatever would make it look like code: the code font on the element that draws
+    // it, or a box drawn by that element or any around it, up to the surface. A box covers all that is inside it, so
+    // nothing the text itself is given could undo one.
+    private const string PlainTextMarksScript = """
+        (surface, [length, plain]) => {
+            const marks = new Set();
+            const walker = document.createTreeWalker(surface, NodeFilter.SHOW_TEXT);
+            let at = 0;
+            for (let text = walker.nextNode(); text; text = walker.nextNode()) {
+                for (let i = 0; i < text.data.length; i++, at++) {
+                    if (!plain[at]) {
+                        continue;
+                    }
+
+                    const say = what => marks.add(`"${text.data[i]}" at ${at}: ${what}`);
+                    if (getComputedStyle(text.parentElement).fontFamily.split(',')[0].replace(/["']/g, '').trim() === 'rt-code') {
+                        say('in the code font');
+                    }
+
+                    for (let element = text.parentElement; element !== surface; element = element.parentElement) {
+                        const style = getComputedStyle(element);
+                        const name = element.outerHTML.slice(0, element.outerHTML.indexOf('>') + 1);
+                        if (!/^(transparent|rgba\(0, 0, 0, 0\))$/.test(style.backgroundColor) || style.backgroundImage !== 'none') {
+                            say(`${name} has the background ${style.backgroundColor} ${style.backgroundImage}`);
+                        }
+
+                        const bordered = ['Top', 'Right', 'Bottom', 'Left'].some(side =>
+                            style[`border${side}Style`] !== 'none' && parseFloat(style[`border${side}Width`]) > 0);
+                        if (bordered || style.outlineStyle !== 'none' || style.boxShadow !== 'none') {
+                            say(`${name} has a border, an outline or a shadow`);
+                        }
+                    }
+                }
+            }
+
+            return at === length ? [...marks] : [`the surface has ${at} characters, and ${length} are stored`];
+        }
+        """;
+
+    private async Task ShouldNotMarkPlainTextAsCodeAsync()
+    {
+        var stored = string.Concat(Nodes(await SaveAsync(Page), "start").Select(Marked));
+        var plain = new List<bool>();
+        var code = false;
+        foreach (var character in stored)
+        {
+            if (character is '«' or '»')
+            {
+                code = character == '«';
+            }
+            else
+            {
+                plain.Add(!code);
+            }
+        }
+
+        plain.ShouldContain(true);
+        (await Start.EvaluateAsync<string[]>(PlainTextMarksScript, new object[] { plain.Count, plain }))
+            .ShouldBeEmpty(await Start.InnerHTMLAsync());
+    }
+
     // Where Firefox writes the "plain" face inside the code, rather than splitting the code around what is typed.
     [Theory]
+    [InlineData("spaces-after", new[] { "ab ", "^e", "cd", "^e", " XYZ" })]
     // Code switched off at the end of code, then more typing.
     [InlineData("off-at-end", new[] { "ab", "^e", "cd", "^e", "X" })]
     // Bold within code.
@@ -716,6 +778,7 @@ public class SurfaceCommandTests(SampleHost host) : SurfaceTest(host)
 
         await ShouldBeStoredAsShownAsync();
         (await Start.EvaluateAsync<string>(ShownCodeScript)).ShouldContain("«", Case.Sensitive, flow);
+        await ShouldNotMarkPlainTextAsCodeAsync();
         // And the toolbar agrees, with the cursor in what was typed last.
         await Start.FocusAsync();
         await Page.Keyboard.PressAsync("End");

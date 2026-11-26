@@ -27,6 +27,9 @@ const SURFACE_FONT = '--_rt-font';
 // the page's own styles say, unless they too are !important and more specific.
 // Only the surface itself is given a weight and a style; everything in it inherits them. Giving each kind of block its
 // own makes Chromium and WebKit write those into style attributes on what moves from one block to another.
+// Code is marked by its font alone, with no background or other box. Plain text can lie inside a code element, and
+// nothing given to it could undo a box drawn around it. And Chromium and WebKit copy such a background onto what moves
+// when lines are joined.
 const SURFACE_STYLES = `
     [data-rt-surface] { font-weight: 400 !important; font-style: normal !important; }
     [data-rt-surface] :is(p, div, h2, h3, h4, ul, ol, li, blockquote, a, span, code, font) {
@@ -34,9 +37,7 @@ const SURFACE_STYLES = `
     }
     [data-rt-surface] :is(b, strong) { font-weight: 700 !important; font-style: inherit !important; }
     [data-rt-surface] :is(i, em) { font-style: italic !important; font-weight: inherit !important; }
-    [data-rt-surface] :is(code, font[face="rt-code"]) {
-        font-family: "rt-code", monospace !important; background: rgba(127, 127, 127, 0.18);
-    }
+    [data-rt-surface] :is(code, font[face="rt-code"]) { font-family: "rt-code", monospace !important; }
     [data-rt-surface] font[face="rt-plain"] { font-family: inherit !important; }
     [data-rt-surface] :is(code, font[face^="rt-code"], font[face^='"rt-code"'], [style*="rt-code"]) font[face="rt-plain"] {
         font-family: var(${SURFACE_FONT}, sans-serif) !important;
