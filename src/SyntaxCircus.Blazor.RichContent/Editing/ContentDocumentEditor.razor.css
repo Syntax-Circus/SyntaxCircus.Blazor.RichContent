@@ -75,8 +75,11 @@
     min-width: 6rem;
 }
 
+/* The height is also set by the script, but only once it has attached: a new row must not grow after it is drawn,
+   which would move the buttons under the table. */
 .doc-editor ::deep .rt-table [data-rt-surface] {
     min-width: 6rem;
+    min-height: 1.5em;
 }
 
 .insert-menu > summary {

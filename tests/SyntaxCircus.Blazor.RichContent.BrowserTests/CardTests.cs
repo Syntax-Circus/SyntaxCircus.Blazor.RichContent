@@ -30,6 +30,30 @@ public class CardTests(SampleHost host) : CardTest(host)
         """;
 
     [Fact]
+    public async Task AnEmptyTableCell_HasItsHeight_BeforeItsScriptAttaches()
+    {
+        await OpenFixtureAsync("everything", "write");
+
+        // A new cell is drawn before its script attaches. If it grew only then, the buttons under the table would move
+        // from under a click already on its way to them.
+        var heights = await Page.Locator(".rt-table [data-rt-surface]").Last.EvaluateAsync<double[]>(
+            """
+            cell => {
+                const attached = cell.getBoundingClientRect().height;
+                const fresh = cell.cloneNode(false);
+                fresh.removeAttribute('style');
+                fresh.removeAttribute('contenteditable');
+                cell.replaceWith(fresh);
+                const unattached = fresh.getBoundingClientRect().height;
+                fresh.replaceWith(cell);
+                return [attached, unattached];
+            }
+            """);
+
+        heights[1].ShouldBeGreaterThanOrEqualTo(heights[0] - 1);
+    }
+
+    [Fact]
     public async Task CodeCard_40KbEdit_OnDefaultHubOptions_KeepsCircuit_AndSavesIt()
     {
         await OpenFixtureAsync("everything", "write");
