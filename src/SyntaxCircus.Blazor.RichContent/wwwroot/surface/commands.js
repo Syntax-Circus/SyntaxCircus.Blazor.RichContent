@@ -1255,9 +1255,10 @@ export function wireToolbar(area, { run, restore, link }) {
             return;
         }
 
-        // A <select> uses the arrows itself.
+        // Left and right go along the toolbar, past the style list too: a closed list takes them as a new choice,
+        // which would restyle the text and go back to it. Up and down are left to the list.
         const step = { ArrowLeft: -1, ArrowRight: 1 }[event.key];
-        if (step && event.target.tagName === 'BUTTON') {
+        if (step && !event.altKey && ['BUTTON', 'SELECT'].includes(event.target.tagName)) {
             const controls = controlsOf(toolbar);
             const next = controls[(controls.indexOf(event.target) + step + controls.length) % controls.length];
             if (next) {

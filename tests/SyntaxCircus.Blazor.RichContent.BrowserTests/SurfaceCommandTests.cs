@@ -541,6 +541,37 @@ public class SurfaceCommandTests(SampleHost host) : SurfaceTest(host)
         (await Page.EvaluateAsync<string>("() => getSelection().toString()")).ShouldBe("text");
     }
 
+    // A list that is closed takes the arrows as a new choice. In the toolbar that would restyle the paragraph and send
+    // the author back to the text, with the buttons after the list never reached.
+    [Fact]
+    public async Task Toolbar_ArrowsAlongIt_PassTheStyleList_WithoutChangingTheText()
+    {
+        await OpenEmptyAsync();
+        await Page.Keyboard.TypeAsync("text");
+        await Expect(Tool("Bulleted list")).ToBeEnabledAsync();
+        await Page.Keyboard.PressAsync("Alt+F10");
+        await Expect(Tool("Bold")).ToBeFocusedAsync();
+        var list = Toolbar.GetByRole(AriaRole.Combobox, new() { Name = "Text style" });
+
+        (string Key, ILocator Reaches)[] steps =
+        [
+            ("ArrowRight", Tool("Italic")),
+            ("ArrowRight", Tool("Inline code")),
+            ("ArrowRight", Tool("Link")),
+            ("ArrowRight", list),
+            ("ArrowRight", Tool("Bulleted list")),
+            ("ArrowLeft", list),
+            ("ArrowLeft", Tool("Link")),
+        ];
+        foreach (var (key, reaches) in steps)
+        {
+            await Page.Keyboard.PressAsync(key);
+            await Expect(reaches).ToBeFocusedAsync();
+        }
+
+        await ShouldHaveNodesAsync(P(T("text")));
+    }
+
     // The browser takes what is code from how text looks, so text that is not code must not look it: not even through a
     // style attribute a command has written.
     private async Task ShouldNotLookLikeCodeOutsideCodeAsync(string what) =>
