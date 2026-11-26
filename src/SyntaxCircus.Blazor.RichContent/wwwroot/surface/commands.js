@@ -60,6 +60,8 @@ function isTextBlock(element) {
 
 const textBlocks = root => [...root.querySelectorAll(TEXT_BLOCKS)].filter(isTextBlock);
 
+// Null for what is in no such element: all of an inline surface, as a table cell is, and in Firefox what is typed after
+// everything in a surface has been deleted.
 function textBlockOf(root, node) {
     for (let element = node instanceof Element ? node : node.parentElement; element && element !== root;
         element = element.parentElement) {
@@ -135,7 +137,24 @@ function placeCaret(point) {
     select(rangeBetween(point, point));
 }
 
-// The selection as positions among the text blocks, which survive elements being replaced by others.
+// The place so many characters into all of the surface's text, or null if it has no such place. Where one text node
+// ends and the next begins, atEnd gives the end of the first, and otherwise the start of the next.
+function surfacePoint(root, characters, atEnd) {
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    let left = characters;
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        if (left < node.data.length || (atEnd && left === node.data.length)) {
+            return [node, left];
+        }
+
+        left -= node.data.length;
+    }
+
+    return null;
+}
+
+// The selection as positions that survive elements being replaced by others: among the text blocks or, where an end is
+// in none, in all of the surface's text.
 function saveSelection(root) {
     const range = selectionIn(root);
     if (!range) {
@@ -149,11 +168,25 @@ function saveSelection(root) {
     };
     const start = position(range.startContainer, range.startOffset);
     const end = position(range.endContainer, range.endOffset);
-    return start && end ? { start, end } : null;
+    return start && end ? { start, end } : {
+        characters: [offsetIn(root, range.startContainer, range.startOffset),
+            offsetIn(root, range.endContainer, range.endOffset)],
+        collapsed: range.collapsed,
+    };
 }
 
 function restoreSelection(root, saved) {
     if (!saved) {
+        return;
+    }
+
+    if (saved.characters) {
+        const from = surfacePoint(root, saved.characters[0], saved.collapsed);
+        const to = saved.collapsed ? from : surfacePoint(root, saved.characters[1], true);
+        if (from && to) {
+            select(rangeBetween(from, to));
+        }
+
         return;
     }
 
@@ -621,8 +654,8 @@ function keepingSelection(root, command) {
     const saved = saveSelection(root);
     const count = textBlocks(root).length;
     const range = selectionIn(root);
-    const before = (container, offset) => rangeBetween([root, 0], [container, offset]).toString().length;
-    const ends = [before(range.startContainer, range.startOffset), before(range.endContainer, range.endOffset)];
+    const ends = [offsetIn(root, range.startContainer, range.startOffset),
+        offsetIn(root, range.endContainer, range.endOffset)];
     const collapsed = range.collapsed;
     if (!command()) {
         return false;
@@ -633,25 +666,7 @@ function keepingSelection(root, command) {
         return true;
     }
 
-    const point = (characters, atEnd) => {
-        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-        let left = characters;
-        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-            if (left < node.data.length || (atEnd && left === node.data.length)) {
-                return [node, left];
-            }
-
-            left -= node.data.length;
-        }
-
-        return null;
-    };
-    const from = point(ends[0], collapsed);
-    const to = collapsed ? from : point(ends[1], true);
-    if (from && to) {
-        select(rangeBetween(from, to));
-    }
-
+    restoreSelection(root, { characters: ends, collapsed });
     return true;
 }
 
@@ -972,7 +987,8 @@ function leaveCodeAtLineEnd(root) {
     }
 
     const code = codeElement(root, range.startContainer);
-    const block = code && textBlockOf(root, code);
+    // Where no element holds the line, the surface itself does.
+    const block = code && (textBlockOf(root, code) ?? root);
     // A style can make a whole block code, and then there is nothing inside the block to step out of.
     if (!block || block === code || fontAtCaret() === PLAIN_FACE
         || rangeBetween([range.startContainer, range.startOffset], ownEnd(block)).toString() !== '') {

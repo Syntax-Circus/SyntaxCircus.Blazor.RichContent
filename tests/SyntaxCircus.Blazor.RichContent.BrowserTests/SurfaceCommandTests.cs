@@ -2238,6 +2238,148 @@ public class SurfaceCommandTests(SampleHost host) : SurfaceTest(host)
         (await ErrorCodesAsync(Page)).ShouldBeEmpty();
     }
 
+    // ---- A table cell, which holds no text block ----
+
+    private ILocator Cell => Page.Locator("[data-block-id=start] [data-rt-card=table] [data-rt-surface]").First;
+
+    private async Task OpenCellAsync(string text)
+    {
+        await OpenEmptyAsync();
+        await Tool("Insert").ClickAsync();
+        await Page.GetByRole(AriaRole.Group, new() { Name = "Insert", Exact = true })
+            .GetByRole(AriaRole.Button, new() { Name = "Table", Exact = true }).ClickAsync();
+        await Expect(Cell).ToBeFocusedAsync();
+        await Page.Keyboard.TypeAsync(text);
+    }
+
+    private async Task<string[]> SavedCellAsync()
+    {
+        var table = Nodes(await SaveAsync(Page), "start").Single(node => (string)node!["kind"]! == "table")!;
+        return CompactAll(table["children"]![0]!["children"]![0]!["children"]!.AsArray());
+    }
+
+    private async Task LinkCellAsync(int from, int to, string address)
+    {
+        await SelectAsync(Cell, from, to);
+        await Expect(Tool("Link")).ToBeEnabledAsync();
+        await Tool("Link").ClickAsync();
+        await ApplyLinkAsync(address);
+    }
+
+    [Theory]
+    // All of the text, and a selection that begins or ends inside the link.
+    [InlineData(0, 13)]
+    [InlineData(0, 6)]
+    [InlineData(6, 13)]
+    public async Task InATableCell_ALinkOverMoreThanALink_CoversAllThatWasSelected(int from, int to)
+    {
+        const string Text = "see docs here";
+        await OpenCellAsync(Text);
+        await LinkCellAsync(4, 8, "/a");
+        ShouldBeNodes(await SavedCellAsync(), T("see "), Link("/a", T("docs")), T(" here"));
+
+        await LinkCellAsync(from, to, "/b");
+
+        string[] expected = (from, to) switch
+        {
+            (0, 13) => [Link("/b", T(Text))],
+            // As in prose, a link reached into is removed whole, and what was selected is linked.
+            (0, 6) => [Link("/b", T("see do")), T("cs here")],
+            _ => [T("see do"), Link("/b", T("cs here"))],
+        };
+        ShouldBeNodes(await SavedCellAsync(), expected);
+        (await Page.EvaluateAsync<string>("() => getSelection().toString()")).ShouldBeOneOf("", Text[from..to]);
+        (await ErrorCodesAsync(Page)).ShouldBeEmpty();
+
+        // The browser's own undo takes it back, a step at a time, to what was there.
+        await Cell.FocusAsync();
+        for (var step = 0; step < 6 && await Cell.Locator("a[href='/b']").CountAsync() > 0; step++)
+        {
+            await UndoAsync();
+        }
+
+        for (var step = 0; step < 6 && await Cell.Locator("a").CountAsync() == 0; step++)
+        {
+            await UndoAsync();
+        }
+
+        ShouldBeNodes(await SavedCellAsync(), T("see "), Link("/a", T("docs")), T(" here"));
+    }
+
+    [Fact]
+    public async Task InATableCell_RemovingLinks_LeavesTheSelectionWhereItWas()
+    {
+        await OpenCellAsync("see docs here");
+        await LinkCellAsync(4, 8, "/a");
+        await SelectAsync(Cell, 0, 13);
+        await Tool("Link").ClickAsync();
+
+        await Page.GetByRole(AriaRole.Button, new() { Name = "Remove link" }).ClickAsync();
+
+        await Expect(Cell.Locator("a")).ToHaveCountAsync(0);
+        (await Page.EvaluateAsync<string>("() => getSelection().toString()")).ShouldBe("see docs here");
+        ShouldBeNodes(await SavedCellAsync(), T("see docs here"));
+    }
+
+    [Fact]
+    public async Task InATableCell_RightArrowLeavesInlineCodeAtTheEnd()
+    {
+        await OpenCellAsync("ab");
+        await Page.Keyboard.PressAsync("Shift+Home");
+        await Page.Keyboard.PressAsync("ControlOrMeta+e");
+        await Expect(Tool("Inline code")).ToHaveAttributeAsync("aria-pressed", "true");
+        await PlaceCaretAsync(Cell);
+
+        await Page.Keyboard.PressAsync("ArrowRight");
+        await Expect(Tool("Inline code")).ToHaveAttributeAsync("aria-pressed", "false");
+        await Page.Keyboard.TypeAsync("c");
+
+        ShouldBeNodes(await SavedCellAsync(), Code("ab"), T("c"));
+    }
+
+    // Firefox, once everything in a surface has been deleted, leaves what is then typed lying in the surface itself,
+    // in no paragraph. The other browsers keep the paragraph.
+    private async Task RetypeEverythingAsync(string text)
+    {
+        await OpenEmptyAsync();
+        await Page.Keyboard.TypeAsync("old");
+        await Page.Keyboard.PressAsync("ControlOrMeta+a");
+        await Page.Keyboard.PressAsync("Delete");
+        await Page.Keyboard.TypeAsync(text);
+    }
+
+    [Fact]
+    public async Task AfterEverythingIsRetyped_ALinkOverMoreThanALink_CoversAllThatWasSelected()
+    {
+        await RetypeEverythingAsync("see docs here");
+        await SelectAsync(Start, 4, 8);
+        await Tool("Link").ClickAsync();
+        await ApplyLinkAsync("/a");
+        await ShouldHaveNodesAsync(P(T("see "), Link("/a", T("docs")), T(" here")));
+        await SelectAsync(Start, 0, 13);
+        await Tool("Link").ClickAsync();
+
+        await ApplyLinkAsync("/b");
+
+        await ShouldHaveNodesAsync(P(Link("/b", T("see docs here"))));
+    }
+
+    [Fact]
+    public async Task AfterEverythingIsRetyped_RightArrowLeavesInlineCodeAtTheEnd()
+    {
+        await RetypeEverythingAsync("ab");
+        await Page.Keyboard.PressAsync("Shift+Home");
+        await Page.Keyboard.PressAsync("ControlOrMeta+e");
+        await Expect(Tool("Inline code")).ToHaveAttributeAsync("aria-pressed", "true");
+        await PlaceCaretAsync(Start);
+
+        await Page.Keyboard.PressAsync("ArrowRight");
+        await Expect(Tool("Inline code")).ToHaveAttributeAsync("aria-pressed", "false");
+        await Page.Keyboard.TypeAsync("c");
+
+        await ShouldHaveNodesAsync(P(Code("ab"), T("c")));
+    }
+
     // ---- Delivery and policy ----
 
     [Theory]
